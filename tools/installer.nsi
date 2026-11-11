@@ -1,4 +1,4 @@
-﻿Unicode true
+Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
@@ -6,24 +6,24 @@
 !include "FileFunc.nsh"
 !include "StrFunc.nsh"
 ${UnStrStr}
-Name "Deskland Preview"
+Name "DynamicDesktop"
 OutFile "${OUTPUT}"
-InstallDir "$LOCALAPPDATA\Programs\Deskland Preview"
-InstallDirRegKey HKCU "Software\DesklandPreview\Installer" "InstallDir"
+InstallDir "$LOCALAPPDATA\Programs\DynamicDesktop"
+InstallDirRegKey HKCU "Software\DynamicDesktop\Installer" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-BrandingText "Deskland Preview"
+BrandingText "DynamicDesktop"
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey /LANG=1033 "ProductName" "Deskland Preview"
-VIAddVersionKey /LANG=1033 "FileDescription" "Deskland Preview Installer"
+VIAddVersionKey /LANG=1033 "ProductName" "DynamicDesktop"
+VIAddVersionKey /LANG=1033 "FileDescription" "DynamicDesktop Installer"
 VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
-VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Deskland authors"
+VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 DynamicDesktop authors"
 !define MUI_ABORTWARNING
-!define MUI_ICON "${PAYLOAD}\host\bin\DesklandPreview.ico"
-!define MUI_UNICON "${PAYLOAD}\host\bin\DesklandPreview.ico"
-!define MUI_FINISHPAGE_RUN "$INSTDIR\host\bin\Deskland.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "$(LaunchDeskland)"
+!define MUI_ICON "${PAYLOAD}\host\bin\DynamicDesktop.ico"
+!define MUI_UNICON "${PAYLOAD}\host\bin\DynamicDesktop.ico"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\host\bin\DynamicDesktop.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "$(LaunchDynamicDesktop)"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
@@ -32,22 +32,20 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Deskland authors"
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
-!insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
-LangString LaunchDeskland ${LANG_SIMPCHINESE} "启动 Deskland Preview"
-LangString LaunchDeskland ${LANG_ENGLISH} "Launch Deskland Preview"
-LangString AppFiles ${LANG_SIMPCHINESE} "Deskland Preview 体验版（沙滩和草地）"
-LangString AppFiles ${LANG_ENGLISH} "Deskland Preview (Beach and Meadow)"
-LangString DesktopShortcut ${LANG_SIMPCHINESE} "桌面快捷方式"
+!insertmacro MUI_LANGUAGE "Dutch"
+LangString LaunchDynamicDesktop ${LANG_ENGLISH} "Launch DynamicDesktop"
+LangString LaunchDynamicDesktop ${LANG_DUTCH} "DynamicDesktop starten"
+LangString AppFiles ${LANG_ENGLISH} "DynamicDesktop themes and application"
+LangString AppFiles ${LANG_DUTCH} "DynamicDesktop-thema's en toepassing"
 LangString DesktopShortcut ${LANG_ENGLISH} "Desktop shortcut"
-LangString NeedX64 ${LANG_SIMPCHINESE} "需要 64 位 Windows 10 或更高版本。"
+LangString DesktopShortcut ${LANG_DUTCH} "Snelkoppeling op het bureaublad"
 LangString NeedX64 ${LANG_ENGLISH} "64-bit Windows 10 or later is required."
-LangString CloseFailed ${LANG_SIMPCHINESE} "请退出正在运行的 Deskland Preview 后重试。"
-LangString CloseFailed ${LANG_ENGLISH} "Please exit Deskland Preview and retry."
-LangString RuntimeFailed ${LANG_SIMPCHINESE} "WebView2 安装未完成。请连接网络，安装 Microsoft Edge WebView2 Runtime 后重试。"
-LangString RuntimeFailed ${LANG_ENGLISH} "WebView2 setup did not complete. Connect to the internet, install Microsoft Edge WebView2 Runtime, and retry."
-LangString InstallingRuntime ${LANG_SIMPCHINESE} "正在安装 Microsoft Edge WebView2 Runtime（需要联网）..."
-LangString InstallingRuntime ${LANG_ENGLISH} "Installing Microsoft Edge WebView2 Runtime (internet required)..."
+LangString NeedX64 ${LANG_DUTCH} "64-bits Windows 10 of hoger is vereist."
+LangString CloseFailed ${LANG_ENGLISH} "Please exit DynamicDesktop and retry."
+LangString CloseFailed ${LANG_DUTCH} "Sluit DynamicDesktop af en probeer het opnieuw."
+LangString RuntimeFailed ${LANG_ENGLISH} "Microsoft Edge WebView2 Runtime is required. Install the runtime separately and retry."
+LangString RuntimeFailed ${LANG_DUTCH} "Microsoft Edge WebView2 Runtime is vereist. Installeer de runtime apart en probeer het opnieuw."
 
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -83,21 +81,12 @@ Section "$(AppFiles)" SecApp
   Call CheckRuntime
   ${If} $0 == ""
   ${OrIf} $0 == "0.0.0.0"
-    InitPluginsDir
-    SetOutPath "$PLUGINSDIR"
-    File /oname=MicrosoftEdgeWebview2Setup.exe "${BOOTSTRAPPER}"
-    DetailPrint "$(InstallingRuntime)"
-    ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1
-    Call CheckRuntime
-    ${If} $0 == ""
-    ${OrIf} $0 == "0.0.0.0"
-      MessageBox MB_ICONSTOP "$(RuntimeFailed)"
-      SetErrorLevel 2
-      Abort
-    ${EndIf}
+    MessageBox MB_ICONSTOP "$(RuntimeFailed)"
+    SetErrorLevel 2
+    Abort
   ${EndIf}
-  IfFileExists "$INSTDIR\host\bin\Deskland.exe" 0 closed
-  ExecWait '"$INSTDIR\host\bin\Deskland.exe" --exit-installed' $0
+  IfFileExists "$INSTDIR\host\bin\DynamicDesktop.exe" 0 closed
+  ExecWait '"$INSTDIR\host\bin\DynamicDesktop.exe" --exit-installed' $0
   ${If} $0 != 0
     MessageBox MB_ICONSTOP "$(CloseFailed)"
     SetErrorLevel 3
@@ -106,21 +95,21 @@ Section "$(AppFiles)" SecApp
   closed:
   !include "${FILE_LIST}"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\Deskland Preview"
-  CreateShortcut "$SMPROGRAMS\Deskland Preview\Deskland Preview.lnk" "$INSTDIR\host\bin\Deskland.exe"
-  CreateShortcut "$SMPROGRAMS\Deskland Preview\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\DesklandPreview\Installer" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "DisplayName" "Deskland Preview"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "Publisher" "Deskland"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "DisplayIcon" "$INSTDIR\host\bin\Deskland.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "NoModify" 1
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "NoRepair" 1
+  CreateDirectory "$SMPROGRAMS\DynamicDesktop"
+  CreateShortcut "$SMPROGRAMS\DynamicDesktop\DynamicDesktop.lnk" "$INSTDIR\host\bin\DynamicDesktop.exe"
+  CreateShortcut "$SMPROGRAMS\DynamicDesktop\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\DynamicDesktop\Installer" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "DisplayName" "DynamicDesktop"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "Publisher" "DynamicDesktop"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "DisplayIcon" "$INSTDIR\host\bin\DynamicDesktop.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "NoRepair" 1
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview" "EstimatedSize" $0
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop" "EstimatedSize" $0
 SectionEnd
 
 Function un.onInit
@@ -128,25 +117,25 @@ Function un.onInit
   SetRegView 64
 FunctionEnd
 Section "Uninstall"
-  IfFileExists "$INSTDIR\host\bin\Deskland.exe" 0 unclosed
-  ExecWait '"$INSTDIR\host\bin\Deskland.exe" --exit-installed' $0
+  IfFileExists "$INSTDIR\host\bin\DynamicDesktop.exe" 0 unclosed
+  ExecWait '"$INSTDIR\host\bin\DynamicDesktop.exe" --exit-installed' $0
   ${If} $0 != 0
     MessageBox MB_ICONSTOP "$(CloseFailed)"
     SetErrorLevel 3
     Abort
   ${EndIf}
   unclosed:
-  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "DesklandPreview"
-  ${UnStrStr} $1 $0 '$\"$INSTDIR\host\bin\Deskland.exe$\"'
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "DynamicDesktop"
+  ${UnStrStr} $1 $0 '$\"$INSTDIR\host\bin\DynamicDesktop.exe$\"'
   ${If} $1 != ""
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "DesklandPreview"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "DynamicDesktop"
   ${EndIf}
   !include "${DELETE_LIST}"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
-  Delete "$SMPROGRAMS\Deskland Preview\Deskland Preview.lnk"
-  Delete "$SMPROGRAMS\Deskland Preview\Uninstall.lnk"
-  RMDir "$SMPROGRAMS\Deskland Preview"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DesklandPreview"
-  DeleteRegKey HKCU "Software\DesklandPreview\Installer"
+  Delete "$SMPROGRAMS\DynamicDesktop\DynamicDesktop.lnk"
+  Delete "$SMPROGRAMS\DynamicDesktop\Uninstall.lnk"
+  RMDir "$SMPROGRAMS\DynamicDesktop"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicDesktop"
+  DeleteRegKey HKCU "Software\DynamicDesktop\Installer"
 SectionEnd

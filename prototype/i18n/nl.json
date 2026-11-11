@@ -1,0 +1,937 @@
+{
+  "name": "Nederlands",
+  "ui": {
+    "adaptive": "Adaptief",
+    "themes": "Thema’s",
+    "collectionTitle": "Kies je landschap.",
+    "collectionSubtitle": "Maak je pictogrammen onderdeel van het landschap.",
+    "language": "Taal",
+    "langAuto": "Systeemtaal",
+    "langAutoWith": "Systeemtaal ({name})",
+    "autostart": "Starten met Windows",
+    "autostartTitle": "DynamicDesktop automatisch starten bij aanmelden",
+    "autostartBlocked": "Automatisch starten is mogelijk geblokkeerd",
+    "autostartWarnSw": "DynamicDesktop is deze keer niet automatisch gestart. Mogelijk heeft {sw} dit geblokkeerd. Open {sw}, zoek DynamicDesktop bij de opstartprogramma’s en sta het toe.",
+    "autostartWarnGeneric": "DynamicDesktop is deze keer niet automatisch gestart. Controleer de opstartinstellingen van je beveiligingssoftware of Windows-instellingen → Apps → Opstarten.",
+    "gotIt": "Begrepen",
+    "livePreview": "Livevoorbeeld",
+    "refresh": "Vernieuwen",
+    "refreshTitle": "Genereer een nieuw landschap voor dit thema",
+    "shareImage": "Deel afbeelding",
+    "shareImageTitle": "Deel je bureaublad met bescherming van je privacy",
+    "shareVideo": "Deel video",
+    "shareVideoTitle": "Deel je bureaubladanimatie met bescherming van je privacy",
+    "generating": "Genereren…",
+    "preparingRec": "Voorbereiden…",
+    "recording": "Opnemen {p}%",
+    "savingVideo": "Opslaan…",
+    "shareFailImage": "Afbeelding maken mislukt: {msg}",
+    "shareFailVideo": "Video opnemen mislukt: {msg}",
+    "unknownReason": "onbekende fout",
+    "shareReadyImage": "Je bureaubladafbeelding is klaar",
+    "shareReadyVideo": "Je bureaubladvideo is klaar",
+    "sharePrivacy": "Pictogrammen zijn vervangen door voorbeelden en bestandsnamen door kleurvlakken, zodat je bestanden niet zichtbaar zijn. ",
+    "shareCopiedImage": "De afbeelding staat op het klembord en kan direct worden geplakt.",
+    "shareCopiedVideo": "De video staat op het klembord en kan direct worden geplakt.",
+    "shareBrowserHint": " (Browserversie: klik op “{btn}” om te downloaden.)",
+    "savedTo": "Opgeslagen in {path}",
+    "openFolder": "Open map",
+    "openImage": "Open afbeelding",
+    "openVideo": "Open video",
+    "saveImage": "Afbeelding opslaan",
+    "saveVideo": "Video opslaan",
+    "ok": "OK",
+    "sharePreviewAlt": "Voorbeeld van de gedeelde afbeelding",
+    "autosave": "Wijzigingen worden automatisch opgeslagen en direct toegepast",
+    "saved": "Opgeslagen ✓",
+    "resetAll": "Alles herstellen",
+    "resetAllTitle": "Herstel alle standaardinstellingen van dit thema",
+    "helpButtonTitle": "Veelgestelde vragen",
+    "helpTitle": "Hulp",
+    "helpSubtitle": "Veelgestelde vragen en oplossingen",
+    "helpWallpaperQ": "DynamicDesktop blijft knipperen of opnieuw starten. Wat kan ik doen?",
+    "helpWallpaperA": "Een automatisch wisselende Windows-achtergrond kan DynamicDesktop laten knipperen of opnieuw starten. Kies een vaste achtergrond.",
+    "helpWallpaperStep1": "Open Windows-instellingen → Persoonlijke instellingen → Achtergrond.",
+    "helpWallpaperStep2": "Kies een afbeelding of effen kleur, geen diavoorstelling of Windows-spotlight.",
+    "helpWallpaperStep3": "Start DynamicDesktop opnieuw nadat je deze instelling hebt gewijzigd.",
+    "badgeOn": "In gebruik",
+    "badgeReady": "Beschikbaar",
+    "ongoingTitle": "Er komt meer",
+    "ongoingDesc": "Nieuwe landschappen en elementen worden later toegevoegd.",
+    "noParams": "Dit thema heeft nog geen instellingen",
+    "resetOne": "Herstel standaardwaarde: {v}",
+    "resetOneAria": "Herstel standaardwaarde van {label}",
+    "dblclickReset": "Dubbelklik om te herstellen ({v})",
+    "comingSoon": "Binnenkort:",
+    "close": "Sluiten",
+    "staticPreview": "Statisch voorbeeld",
+    "locationTitle": "Locatie en tijdzone",
+    "locationHint": "Gebruikt voor automatische verlichting. Zonder coördinaten volgt de verlichting de lokale klok. Een lege tijdzone gebruikt de systeemtijdzone.",
+    "latitude": "Breedtegraad",
+    "longitude": "Lengtegraad",
+    "timeZone": "Tijdzone (IANA)",
+    "locationSave": "Locatie toepassen",
+    "locationReset": "Standaardwaarden",
+    "locationInvalid": "Vul beide geldige coördinaten in: breedtegraad −90 tot 90 en lengtegraad −180 tot 180.",
+    "timeZoneInvalid": "Vul een geldige IANA-tijdzone in, bijvoorbeeld Europe/Amsterdam.",
+    "locationSaved": "Locatie toegepast.",
+    "locationSearchLabel": "Plaats of Nederlandse postcode",
+    "locationExample": "Amsterdam of 1012",
+    "locationSearchButton": "Zoeken",
+    "locationManual": "Coördinaten handmatig invoeren",
+    "locationSystem": "Tijdzone van Windows",
+    "locationResults": "Zoekresultaten",
+    "locationShortQuery": "Vul minstens twee tekens in.",
+    "locationSearching": "Zoeken…",
+    "locationChoose": "Kies een resultaat om de locatie toe te passen.",
+    "locationNoResults": "Geen resultaat. Probeer een andere plaatsnaam of een Nederlandse postcode.",
+    "locationSearchError": "Zoeken is momenteel niet mogelijk. Controleer je internetverbinding en probeer het opnieuw.",
+    "locationSearchPrivacy": "Zoekopdrachten worden naar Open-Meteo verstuurd."
+  },
+  "host": {
+    "traySettings": "Instellingen…",
+    "trayPause": "Animatie pauzeren",
+    "trayReload": "Opnieuw laden",
+    "trayAutostart": "Starten met Windows",
+    "trayExit": "Afsluiten (oorspronkelijke achtergrond herstellen)",
+    "welcomeTitle": "DynamicDesktop is actief",
+    "welcomeBody": "Klik op het DynamicDesktop-pictogram in het systeemvak{hotkey} om het menu te openen.\nZie je het pictogram niet? Klik dan op ^ rechts op de taakbalk.",
+    "welcomeHotkey": " of druk op Ctrl+Alt+H",
+    "errNotReady": "De achtergrond is nog niet gereed",
+    "errNoImage": "Geen afbeelding ontvangen",
+    "errNoVideo": "Geen video ontvangen",
+    "errBusyImage": "De vorige afbeelding wordt nog gemaakt",
+    "errBusyVideo": "De vorige video wordt nog opgenomen",
+    "errImageTimeout": "Het maken duurde te lang",
+    "errVideoTimeout": "De opname duurde te lang",
+    "errBadData": "De pagina gaf onvolledige gegevens terug",
+    "errRebuilt": "Windows heeft de achtergrondlaag herhaaldelijk opnieuw opgebouwd. DynamicDesktop is gestopt.",
+    "errSeeLog": "Zie logboek: {path}",
+    "errSettings": "Het instellingenvenster kon niet starten: {msg}",
+    "errNoPage": "Pagina niet gevonden: {path}",
+    "errNoDesktop": "Bureaublad niet gevonden.",
+    "errStart": "Opstarten mislukt: {msg}",
+    "trayMousePassthrough": "Muisklikken doorlaten"
+  },
+  "themes": {
+    "beach": {
+      "name": "Strand",
+      "desc": "De kustlijn slingert rond je bestanden terwijl golven het zand bereiken",
+      "groups": [
+        "Kustlijn",
+        "Water",
+        "Details",
+        "Licht en schaduwen"
+      ],
+      "params": {
+        "palms": {
+          "label": "Palmbomen",
+          "hint": "Aantal palmbomen; 0 verbergt ze. Bij weinig zand verschijnen er minder.",
+          "unit": ""
+        },
+        "sigma": {
+          "label": "Afstand tot pictogrammen",
+          "hint": "Hoe ver de kustlijn van je pictogrammen ligt"
+        },
+        "warp": {
+          "label": "Kronkelende kust",
+          "hint": "Hoe sterk de kustlijn kronkelt"
+        },
+        "shoal": {
+          "label": "Helder ondiep water",
+          "hint": "Breedte van het doorzichtige water boven het zand"
+        },
+        "shallow": {
+          "label": "Ondiepe zee",
+          "hint": "Afstand waarover het water van turquoise naar diepblauw verloopt"
+        },
+        "kayaks": {
+          "label": "Kajaks",
+          "unit": ""
+        },
+        "birds": {
+          "label": "Zeevogels",
+          "hint": "Meeuwen zweven en cirkelen boven zee",
+          "unit": ""
+        },
+        "sceneShadows": {
+          "label": "Schaduwen van het landschap",
+          "hint": "Laat de schaduwen meebewegen met de zon",
+          "options": [
+            "Uit",
+            "Aan"
+          ]
+        },
+        "iconShadows": {
+          "label": "Schaduwen van bureaubladiconen",
+          "hint": "Gebruik de vorm van je iconen om lokaal schaduwen te tekenen",
+          "options": [
+            "Uit",
+            "Aan"
+          ]
+        },
+        "shadowSize": {
+          "label": "Schaduwlengte"
+        },
+        "moon": {
+          "label": "Maan",
+          "hint": "Toon de maan in de nachtstand",
+          "options": [
+            "Verborgen",
+            "Zichtbaar"
+          ]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "meadow": {
+      "name": "Weide",
+      "desc": "Een geschilderde weide met witte wolken rond je pictogrammen",
+      "groups": [
+        "Rond pictogrammen",
+        "Wolken",
+        "Personages",
+        "Licht en schaduwen"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Wolkengrootte",
+          "hint": "Hoe ver de wolken rond pictogrammen uitwaaieren"
+        },
+        "cover": {
+          "label": "Wolken boven de weide",
+          "hint": "Hoeveel wolken boven de weide drijven"
+        },
+        "flow": {
+          "label": "Drijfsnelheid",
+          "hint": "Hoe snel de wolken bewegen en van vorm veranderen"
+        },
+        "showBoy": {
+          "label": "Toon jongen",
+          "hint": "Toon of verberg de jongen met zijn vlieger",
+          "options": [
+            "Verbergen",
+            "Tonen"
+          ]
+        },
+        "showCat": {
+          "label": "Toon kitten",
+          "hint": "Het zwarte kitten in het gras",
+          "options": [
+            "Verbergen",
+            "Tonen"
+          ]
+        },
+        "sceneShadows": {
+          "label": "Schaduwen van het landschap",
+          "hint": "Laat de schaduwen meebewegen met de zon",
+          "options": [
+            "Uit",
+            "Aan"
+          ]
+        },
+        "iconShadows": {
+          "label": "Schaduwen van bureaubladiconen",
+          "hint": "Gebruik de vorm van je iconen om lokaal schaduwen te tekenen",
+          "options": [
+            "Uit",
+            "Aan"
+          ]
+        },
+        "shadowSize": {
+          "label": "Schaduwlengte"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "maldives": {
+      "name": "Maldiven",
+      "desc": "Een tropische lagune"
+    },
+    "sky": {
+      "name": "Lucht",
+      "desc": "Witte wolken verzamelen zich rond je iconen. Kies daglicht, nacht of automatische verlichting.",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "ocean": {
+      "name": "Oceaan",
+      "desc": "Wolken boven een blauwe zee",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "forest": {
+      "name": "Bos",
+      "desc": "Een open plek tussen de bomen",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "pinkforest": {
+      "name": "Roze bos",
+      "desc": "Een bos van roze bomen",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "map": {
+      "name": "Getekende stad",
+      "desc": "Een stadskaart met pleinen rond je pictogrammen",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "citymap": {
+      "name": "Kleurrijke stad",
+      "desc": "Een kleurrijke stadskaart",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "worldmap": {
+      "name": "Oude kaart",
+      "desc": "Een getekende kaart met steden en zeeën",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "nauticalmap": {
+      "name": "Zeekaart",
+      "desc": "Een getekende zeekaart met schepen en eilanden",
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "isles": {
+      "name": "Zwevende eilanden",
+      "desc": "Eilanden met bomen en kristallen zweven boven een wolkenzee.",
+      "groups": [
+        "Eilanden",
+        "Lucht",
+        "Magie",
+        "Dieren"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Eilandgrootte",
+          "hint": "Hoe ver de eilanden rondom je iconen uitsteken"
+        },
+        "warp": {
+          "label": "Onregelmatige oevers",
+          "hint": "Hoe onregelmatig de omtrek van de eilanden is"
+        },
+        "islets": {
+          "label": "Kleine eilanden",
+          "hint": "Kleine eilanden die los van de iconen zweven"
+        },
+        "trees": {
+          "label": "Boomdichtheid",
+          "hint": "Hoeveel bomen op de eilanden groeien"
+        },
+        "sky": {
+          "label": "Luchtkleur",
+          "options": [
+            "Schemering",
+            "Dageraad",
+            "Dag",
+            "Nacht"
+          ],
+          "hint": "De kleur van de lucht en de wolkenzee onder de eilanden"
+        },
+        "flow": {
+          "label": "Wolkensnelheid",
+          "hint": "Hoe snel de wolken en lichtpuntjes bewegen"
+        },
+        "crystals": {
+          "label": "Kristallen",
+          "hint": "Aantal gloeiende kristallen langs de eilandranden"
+        },
+        "motes": {
+          "label": "Lichtpuntjes",
+          "hint": "Lichtpuntjes die langzaam opstijgen"
+        },
+        "dragon": {
+          "label": "Draak",
+          "options": [
+            "Verbergen",
+            "Tonen"
+          ],
+          "hint": "Een draak die af en toe door de lucht vliegt"
+        }
+      }
+    },
+    "circuit": {
+      "name": "Printplaat",
+      "desc": "Je iconen vormen chips op een printplaat vol oplichtende signaalsporen.",
+      "groups": [
+        "Printplaat",
+        "Signalen"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Chipgrootte",
+          "hint": "Hoe ver het kopervlak rondom je iconen uitstrekt"
+        },
+        "density": {
+          "label": "Spoordichtheid",
+          "hint": "Hoeveel sporen, chips en onderdelen op de printplaat liggen"
+        },
+        "color": {
+          "label": "Kleurenschema",
+          "options": [
+            "Groen",
+            "Cyaan",
+            "Amber",
+            "Magenta"
+          ]
+        },
+        "pulses": {
+          "label": "Signaalpulsen",
+          "hint": "Aantal oplichtende stippen die over de sporen bewegen"
+        },
+        "speed": {
+          "label": "Signaalsnelheid",
+          "hint": "Snelheid van de pulsen, scanlijn en vallende cijfers"
+        },
+        "rain": {
+          "label": "Digitale regen",
+          "hint": "Hoeveel kolommen met cijfers over de printplaat vallen"
+        },
+        "scan": {
+          "label": "Scanlijn",
+          "options": [
+            "Uit",
+            "Aan"
+          ],
+          "hint": "Een lichtbalk die van boven naar beneden over de sporen schuift"
+        }
+      }
+    },
+    "steampunk": {
+      "name": "Steampunk",
+      "desc": "Tandwielen en stoomleidingen omringen je iconen in een mechanisch landschap.",
+      "groups": [
+        "Metaalplaat",
+        "Mechaniek",
+        "Stoom"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Grootte van de basis",
+          "hint": "Hoe ver de metaalplaten rondom je iconen uitsteken"
+        },
+        "metal": {
+          "label": "Metaal",
+          "options": [
+            "Messing",
+            "Koper",
+            "IJzer"
+          ]
+        },
+        "gears": {
+          "label": "Tandwieldichtheid",
+          "hint": "Hoeveel tandwielgroepen de vrije ruimte vullen"
+        },
+        "speed": {
+          "label": "Draaisnelheid",
+          "hint": "Snelheid van de tandwielen en de wijzers"
+        },
+        "pipes": {
+          "label": "Leidingen",
+          "hint": "Aantal koperen leidingen die uit de platen komen"
+        },
+        "steam": {
+          "label": "Hoeveelheid stoom",
+          "hint": "Hoeveel stoom uit de leidingverbindingen ontsnapt"
+        },
+        "airship": {
+          "label": "Luchtschip",
+          "options": [
+            "Verbergen",
+            "Tonen"
+          ],
+          "hint": "Een luchtschip dat af en toe over de machine vliegt"
+        }
+      }
+    },
+    "cosmos": {
+      "name": "Kosmos",
+      "desc": "Planeten en sterrenstelsels vormen zich rond je bureaubladiconen.",
+      "groups": [
+        "Ruimte",
+        "Sterrenstelsel",
+        "Diepe ruimte"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Grootte rond iconen",
+          "hint": "Hoe ver de nevel en de donkere ruimte rondom je iconen uitsteken"
+        },
+        "palette": {
+          "label": "Kleurenpalet",
+          "options": [
+            "Violet",
+            "Smaragd",
+            "Vuur",
+            "IJs"
+          ]
+        },
+        "stars": {
+          "label": "Sterdichtheid",
+          "hint": "Hoeveel sterren er op de achtergrond staan"
+        },
+        "orbits": {
+          "label": "Banen",
+          "hint": "Aantal banen rond elke groep iconen"
+        },
+        "planets": {
+          "label": "Planeten",
+          "hint": "Aantal planeten dat door de banen beweegt"
+        },
+        "speed": {
+          "label": "Omloopsnelheid",
+          "hint": "Snelheid van de planeten en het draaiende sterrenstelsel"
+        },
+        "galaxy": {
+          "label": "Sterrenstelsel",
+          "options": [
+            "Verbergen",
+            "Tonen"
+          ],
+          "hint": "Een spiraalstelsel dat langzaam draait in de vrije ruimte"
+        },
+        "meteors": {
+          "label": "Meteoren",
+          "hint": "Hoeveel vallende sterren verschijnen. Af en toe vliegt er een komeet voorbij"
+        }
+      }
+    },
+    "living-lagoon": {
+      "name": "Lagune-eilanden",
+      "desc": "Zandeilandjes volgen je iconen tussen golven en lichtspel in een turquoise lagune.",
+      "groups": [
+        "Rond iconen",
+        "Animatie",
+        "Verlichting"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Eilandgrootte"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "detail": {
+          "label": "Detailniveau"
+        },
+        "palette": {
+          "label": "Kleurenpalet",
+          "options": [
+            "Turquoise",
+            "Oceaanblauw"
+          ]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "living-sky": {
+      "name": "Wolkentuin",
+      "desc": "Gelaagde wolkenbanken verzamelen zich rond je iconen en werpen schaduwen.",
+      "groups": [
+        "Rond iconen",
+        "Animatie",
+        "Verlichting"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Wolkgrootte"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "detail": {
+          "label": "Detailniveau"
+        },
+        "palette": {
+          "label": "Kleurenpalet",
+          "options": [
+            "Blauwe lucht",
+            "Zonsondergang"
+          ]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "living-colors": {
+      "name": "Vloeibare kleuren",
+      "desc": "Kleurvlakken vloeien rond de iconen met subtiele rimpelingen langs de randen.",
+      "groups": [
+        "Rond iconen",
+        "Animatie",
+        "Verlichting"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Grootte van kleurvlakken"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "detail": {
+          "label": "Detailniveau"
+        },
+        "palette": {
+          "label": "Kleurenpalet",
+          "options": [
+            "Jade",
+            "Lila",
+            "Amber",
+            "Schemering"
+          ]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "community-sky": {
+      "name": "Lucht (community)",
+      "desc": "Zachte wolken verzamelen zich rond je iconen, met kleinere wolken op de achtergrond.",
+      "groups": [
+        "Wolken",
+        "Verlichting"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Wolkgrootte"
+        },
+        "detail": {
+          "label": "Wolkendekking"
+        },
+        "speed": {
+          "label": "Drijfsnelheid"
+        },
+        "palette": {
+          "label": "Luchtkleuren",
+          "options": [
+            "Blauw",
+            "Schemering",
+            "Nacht"
+          ]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "woodland": {
+      "name": "Bos (community)",
+      "desc": "Boomkruinen omringen open plekken die gevormd worden door je bureaubladiconen.",
+      "groups": [
+        "Bos",
+        "Verlichting"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Grootte van open plekken"
+        },
+        "density": {
+          "label": "Boomdichtheid"
+        },
+        "speed": {
+          "label": "Windsnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "beach-turquoise": {
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "lake": {
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    },
+    "lotus": {
+      "groups": [
+        "Landschap",
+        "Verlichting"
+      ],
+      "params": {
+        "spread": {
+          "label": "Gebied rond iconen"
+        },
+        "detail": {
+          "label": "Dichtheid van details"
+        },
+        "speed": {
+          "label": "Animatiesnelheid"
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": [
+            "Dag",
+            "Nacht",
+            "Automatisch"
+          ]
+        }
+      }
+    }
+  }
+}

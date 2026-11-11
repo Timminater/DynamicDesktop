@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DynamicDesktop · Steampunk</title>
+<!--
+  steampunk theme (top view; Canvas 2D)
+  Art direction: a machine on a dark wooden bench: the icons sit on riveted metal plates, trains of gears turn in the free space,
+  copper pipes leave the plates and end in pressure gauges, joints leak puffs of steam, and now and then an airship drifts over
+  - Plates: the same icon field as the other themes (without warping), traced with marching squares and drawn as vector paths
+  - Gears: trains grown from seed gears; every gear touches only its parent, with the tooth count fixing the radius, so the teeth really mesh:
+    a child's angle is computed from its parent's angle and the two tooth counts
+  - The bench, plates, pipes, dials and gear shadows are static and cached at the screen's actual pixels (old and new scene cross-fade when the icons move)
+  - Every frame only draws small things: the gears (each one a small sprite drawn once, then only rotated), gauge needles, steam puffs, the airship
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #24160f; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  /* Preview mode (?preview=1, inside the settings window) and standalone mode: translucent blocks mark where the icons are */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.ghosts #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.4); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="ghosts"></div>
+<!-- Community theme (GPL-3.0). See NOTICE for attribution. -->
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;   // desktop grid (also used by share.js)
+const STEP = 6;                                  // field grid (CSS px)
+const PG = 14;                                   // pipe routing grid (CSS px)
+const ZG = 26;                                   // plate grid (CSS px): coarse, so the plates have long straight edges and 45° chamfers
+const PITCH = 13;                                // distance between two gear teeth along the pitch circle (CSS px): the same for every gear, so any two can mesh
+const MORPH_MS = 1400;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');                // wallpaper mode: loaded by the desktop host; messages come from the host
+const PREVIEW = QS.has('preview');               // preview mode: the preview (iframe) in the settings window; messages come from the parent page
+// Defaults must match the "default" values of the steampunk theme in themes.json
+const P = { sigma: 50, metal: 0, gears: 0.6, speed: 1, pipes: 6, steam: 0.5, airship: 1, adaptive: 1, cap30: true };
+const DEFAULTS = Object.assign({}, P);
+// Accepted parameters: [min, max, integer]
+const RANGES = { sigma: [30, 140], metal: [0, 2, 1], gears: [0, 1], speed: [0, 3], pipes: [0, 12, 1], steam: [0, 1], airship: [0, 1, 1], adaptive: [0, 1, 1] };
+const GEOMETRY_KEYS = ['sigma', 'gears', 'pipes', 'adaptive'];
+// Metals: brass, copper, iron, dark bronze. hi / mid / lo shade the gears; plate: the (darker, aged) plates under the icons, so the white icon names stay readable
+const METALS = [
+  { hi: '#f3dc8e', mid: '#bd963c', lo: '#5c4314', plate: ['#b89a4c', '#8d7130', '#584218'] },
+  { hi: '#f4bb96', mid: '#b8673b', lo: '#5d2b14', plate: ['#b7764c', '#8a5032', '#532a1b'] },
+  { hi: '#e4e8ed', mid: '#8c97a4', lo: '#3d444e', plate: ['#8b96a4', '#646e7b', '#383e47'] },
+  { hi: '#caa979', mid: '#86663a', lo: '#3f2f19' },
+];
+
+/* ======================================================================
+   Random numbers and noise (seeded: desktop and preview show the same machine)
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+/* ======================================================================
+   Icon field (CPU): s = signed distance to the edge of the plates (<0 is on a plate), as in the other themes
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1;
+function computeField(rects) {
+  const N = Gw * Gh, f1 = new Float32Array(N), sig = P.sigma, is1 = 1 / (sig * sig);
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      let dx = Math.abs(gx * STEP - r.cx) - chw, dy = Math.abs(gy * STEP - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[gy * Gw + gx] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  return s;
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+// Outline of the plates: marching squares over inside/outside values on a coarse grid; crossing points are always edge midpoints,
+// so the outline only has horizontal, vertical and 45° runs, like cut sheet metal. The grid is padded with "outside", so every outline is a closed loop.
+// Returns loops of [x0, y0, x1, y1, …] (CSS px)
+function plateLoops(s) {
+  const gw = Math.ceil(W / ZG) + 3, gh = Math.ceil(H / ZG) + 3, V = new Int8Array(gw * gh).fill(1);
+  for (let j = 1; j < gh - 1; j++) for (let i = 1; i < gw - 1; i++) if (sampleArr(s, (i - 1) * ZG, (j - 1) * ZG) < 0) V[j * gw + i] = -1;
+  const pos = new Map(), adj = new Map();
+  const link = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); };
+  const hk = (i, j) => { const k = (j * gw + i) * 2; pos.set(k, [(i - 0.5) * ZG, (j - 1) * ZG]); return k; };
+  const vk = (i, j) => { const k = (j * gw + i) * 2 + 1; pos.set(k, [(i - 1) * ZG, (j - 0.5) * ZG]); return k; };
+  for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
+    const a = V[j * gw + i], b = V[j * gw + i + 1], c = V[(j + 1) * gw + i + 1], d = V[(j + 1) * gw + i];
+    const code = (a < 0 ? 8 : 0) | (b < 0 ? 4 : 0) | (c < 0 ? 2 : 0) | (d < 0 ? 1 : 0);
+    if (code === 0 || code === 15) continue;
+    const E = [() => hk(i, j), () => vk(i + 1, j), () => hk(i, j + 1), () => vk(i, j)];   // top, right, bottom, left
+    const seg = (p, q) => link(E[p](), E[q]());
+    const mid = (a + b + c + d) / 4 < 0;
+    switch (code) {
+      case 1: case 14: seg(3, 2); break;
+      case 2: case 13: seg(2, 1); break;
+      case 3: case 12: seg(3, 1); break;
+      case 4: case 11: seg(0, 1); break;
+      case 6: case 9: seg(0, 2); break;
+      case 7: case 8: seg(3, 0); break;
+      case 5: if (mid) { seg(0, 3); seg(1, 2); } else { seg(0, 1); seg(3, 2); } break;
+      case 10: if (mid) { seg(0, 1); seg(2, 3); } else { seg(0, 3); seg(1, 2); } break;
+    }
+  }
+  const loops = [], used = new Set();
+  for (const start of adj.keys()) {
+    if (used.has(start)) continue;
+    const pts = [];
+    let prev = -1, cur = start;
+    while (cur !== undefined && !used.has(cur)) {
+      used.add(cur);
+      const p = pos.get(cur); pts.push(p[0], p[1]);
+      const nb = adj.get(cur), next = nb[0] !== prev ? nb[0] : nb[1];
+      prev = cur; cur = next;
+    }
+    if (pts.length >= 8) loops.push(pts);
+  }
+  return loops;
+}
+function loopsPath(loops) {                      // straight runs with slightly rounded corners
+  const path = new Path2D();
+  for (const L of loops) {
+    const n = L.length / 2;
+    path.moveTo((L[2 * n - 2] + L[0]) / 2, (L[2 * n - 1] + L[1]) / 2);
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      path.arcTo(L[2 * i], L[2 * i + 1], (L[2 * i] + L[2 * j]) / 2, (L[2 * i + 1] + L[2 * j + 1]) / 2, 5);
+    }
+    path.closePath();
+  }
+  return path;
+}
+
+/* ======================================================================
+   Scene geometry (CSS px; independent of the canvas resolution): plates, rivets, gear trains, pipes and their fittings
+   ====================================================================== */
+let icons = [];
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+const DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];    // E, S, W, N
+const BLOCK = 255;
+const gearR = n => n * PITCH / (2 * Math.PI);    // pitch radius of a gear with n teeth
+function buildGeometry() {
+  const s = computeField(P.adaptive ? iconRects() : []);
+  const loops = plateLoops(s);
+  const geo = { s, plate: loopsPath(loops), rivets: [], gears: [], pipes: [], gauges: [], valves: [], vents: [], rasters: [] };
+
+  // Rivets: every 22px along the outline, set back 9px onto the plate. Which side is the plate: the one where the field is lower
+  for (const L of loops) {
+    let acc = 11;
+    for (let i = 0, n = L.length / 2; i < n; i++) {
+      const j = (i + 1) % n, ax = L[2 * i], ay = L[2 * i + 1], d = Math.hypot(L[2 * j] - ax, L[2 * j + 1] - ay), ux = (L[2 * j] - ax) / d, uy = (L[2 * j + 1] - ay) / d;
+      for (; acc < d; acc += 22) {
+        const x = ax + ux * acc, y = ay + uy * acc;
+        if (x < 4 || y < 4 || x > W - 4 || y > H - 4) continue;
+        const side = sampleArr(s, x - uy * 9, y + ux * 9) < sampleArr(s, x + uy * 9, y - ux * 9) ? 1 : -1;
+        geo.rivets.push([x - uy * 9 * side, y + ux * 9 * side]);
+      }
+      acc -= d;
+    }
+  }
+
+  // Gear trains. A gear fits if it is clear of the plates and of every gear except the parent it meshes with
+  const fits = (x, y, R, parent) => {
+    if (x < 6 || y < 6 || x > W - 6 || y > H - 6) return false;
+    if (sampleArr(s, x, y) < R + 18) return false;
+    for (const g of geo.gears) if (g !== parent && Math.hypot(g.x - x, g.y - y) < g.R + R + 15) return false;
+    return true;
+  };
+  const addGear = (x, y, n, parent, al, a, b) => {
+    const g = { x, y, n, R: gearR(n), parent, al, phi: 0, m: hash2(a, b, 61), style: hash2(a, b, 62),
+      w: (hash2(a, b, 63) < 0.5 ? -1 : 1) * (14 + 12 * hash2(a, b, 64)) / gearR(n), ph0: hash2(a, b, 65) * 6.283 };
+    geo.gears.push(g);
+    return g;
+  };
+  for (let i = 0, nSeeds = Math.round(P.gears * W * H / 170000); i < nSeeds; i++) {
+    let first = null;
+    for (let a = 0; a < 6 && !first; a++) {
+      const n = 14 + (hash2(i, a, 51) * 26 | 0), x = hash2(i, a, 52) * W, y = hash2(i, a, 53) * (H - TASKBAR);
+      if (fits(x, y, gearR(n), null)) first = addGear(x, y, n, null, 0, i, a);
+    }
+    if (!first) continue;
+    const train = [first], want = 2 + (hash2(i, 0, 54) * 6 | 0);
+    for (let t = 0; t < 50 && train.length < want; t++) {
+      const p = train[(hash2(i, t, 55) * train.length) | 0], n = 8 + (hash2(i, t, 56) * 24 | 0), R = gearR(n), al = hash2(i, t, 57) * 6.283;
+      const x = p.x + Math.cos(al) * (p.R + R), y = p.y + Math.sin(al) * (p.R + R);
+      if (fits(x, y, R, p)) train.push(addGear(x, y, n, p, al, i, t + 10));
+    }
+  }
+
+  // Pipes: routed on a grid around the plates and gears, only right-angle turns, one empty cell between two pipes
+  const cols = Math.ceil(W / PG) + 1, rows = Math.ceil(H / PG) + 1, occ = new Uint8Array(cols * rows);
+  const X = c => c * PG + PG / 2, Y = r => r * PG + PG / 2, inside = (c, r) => c >= 0 && r >= 0 && c < cols && r < rows;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (sampleArr(s, X(c), Y(r)) < 13) occ[r * cols + c] = BLOCK;
+  for (const g of geo.gears) {
+    const R = g.R + 16, c0 = Math.floor((g.x - R) / PG), c1 = Math.ceil((g.x + R) / PG), r0 = Math.floor((g.y - R) / PG), r1 = Math.ceil((g.y + R) / PG);
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (inside(c, r) && Math.hypot(X(c) - g.x, Y(r) - g.y) < R) occ[r * cols + c] = BLOCK;
+  }
+  const canStep = (id, c, r, d) => {              // 0 no, 1 yes, 2 it leaves the screen
+    const nc = c + DX[d], nr = r + DY[d];
+    if (!inside(nc, nr)) return 2;
+    if (occ[nr * cols + nc]) return 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!inside(nc + dx, nr + dy)) continue;
+      const o = occ[(nr + dy) * cols + nc + dx];
+      if (o && o !== id && o !== BLOCK) return 0;
+    }
+    return 1;
+  };
+  const route = (c, r, dir, h, from) => {
+    const id = geo.pipes.length + 1, rnd = mulberry32((h * 4294967296) >>> 0), cells = [[c, r, dir]];
+    occ[r * cols + c] = id;
+    let run = 3 + (rnd() * 7 | 0), out = false;
+    for (let len = 0, max = 26 + (rnd() * 46 | 0); len < max && !out; len++) {
+      let want = dir;
+      if (run <= 0) { want = (dir + (rnd() < 0.5 ? 1 : 3)) % 4; run = 4 + (rnd() * 10 | 0); }
+      let moved = false;
+      for (const d of [want, dir, (dir + 1) % 4, (dir + 3) % 4]) {
+        const st = canStep(id, c, r, d);
+        if (!st) continue;
+        if (d !== dir) run = Math.max(run, 3);     // after a turn go straight for a while: no zigzag
+        c += DX[d]; r += DY[d]; dir = d; cells.push([c, r, d]); moved = true;
+        if (st === 2) out = true; else occ[r * cols + c] = id;
+        break;
+      }
+      if (!moved) break;
+      run--;
+    }
+    if (cells.length < 6) { for (const [cc, rr] of cells) if (inside(cc, rr)) occ[rr * cols + cc] = 0; return; }
+    const pts = [from[0], from[1]];
+    cells.forEach(([cc, rr, d], i) => { if (i === cells.length - 1 || cells[i + 1][2] !== d) pts.push(X(cc), Y(rr)); });
+    const pipe = { pts, out, joints: [] };
+    geo.pipes.push(pipe);
+    // fittings: a flange at the start and every ~110px on straight runs, a joint at each elbow, a valve on a long run, a gauge at the end
+    const n = pts.length / 2;
+    for (let i = 0; i + 1 < n; i++) {
+      const ax = pts[2 * i], ay = pts[2 * i + 1], bx = pts[2 * i + 2], by = pts[2 * i + 3], d = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / d, uy = (by - ay) / d;
+      for (let k = i === 0 ? 10 : 62; k < d - 30; k += 110) pipe.joints.push([ax + ux * k, ay + uy * k, ux, uy]);
+      if (i > 0) geo.vents.push({ x: ax, y: ay, h: rnd(), next: 1 + rnd() * 6 });
+      if (d > 150 && rnd() < 0.45 && !pipe.valve) { pipe.valve = true; geo.valves.push([ax + ux * d * 0.5, ay + uy * d * 0.5]); }
+    }
+    if (!out) geo.gauges.push({ x: pts[2 * n - 2], y: pts[2 * n - 1], ph: rnd() * 6.283, level: 0.25 + 0.5 * rnd() });
+  };
+  const starts = [];
+  for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+    if (occ[r * cols + c]) continue;
+    const plate = (qc, qr) => sampleArr(s, X(qc), Y(qr)) < 13;
+    const dir = plate(c - 1, r) ? 0 : plate(c + 1, r) ? 2 : plate(c, r - 1) ? 1 : plate(c, r + 1) ? 3 : -1;
+    if (dir >= 0) starts.push([c, r, dir, hash2(c, r, 71)]);
+  }
+  if (!starts.length) for (let i = 0; i < 24; i++) {  // no plates: the pipes come in from the left and the top edge
+    const left = hash2(i, 1, 72) < 0.5;
+    starts.push(left ? [0, 2 + (hash2(i, 2, 72) * (rows - 6) | 0), 0, hash2(i, 3, 72)] : [2 + (hash2(i, 2, 72) * (cols - 4) | 0), 0, 1, hash2(i, 3, 72)]);
+  }
+  starts.sort((a, b) => a[3] - b[3]);
+  const taken = [];
+  for (const [c, r, dir, h] of starts) {
+    if (geo.pipes.length >= P.pipes) break;
+    if (occ[r * cols + c] || taken.some(t => Math.hypot(t[0] - X(c), t[1] - Y(r)) < 150)) continue;
+    taken.push([X(c), Y(r)]);
+    route(c, r, dir, h, [X(c) - DX[dir] * PG * 2, Y(r) - DY[dir] * PG * 2]);
+  }
+  geo.vents.sort((a, b) => a.h - b.h);
+  return geo;
+}
+
+/* ======================================================================
+   Canvas and cached layers (drawn at the canvas's actual pixels; at most two sizes are kept: the screen and a share/recording size)
+   ====================================================================== */
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
+function cached(list, build) {
+  const w = cv.width, h = cv.height;
+  let hit = list.find(e => e.w === w && e.h === h && e.metal === P.metal);
+  if (!hit) { hit = { w, h, metal: P.metal, c: build(w, h, cv._scale) }; list.unshift(hit); if (list.length > 2) list.pop(); }
+  return hit.c;
+}
+function sharpPattern(x, s, size, paint) {       // a pattern drawn at the actual pixels (the pattern matrix undoes the canvas scale)
+  const S = Math.max(2, Math.round(size * s)), c = makeCanvas(S, S), g = c.getContext('2d');
+  paint(g, S);
+  const pat = x.createPattern(c, 'repeat');
+  pat.setTransform(new DOMMatrix([size / S, 0, 0, size / S, 0, 0]));
+  return pat;
+}
+const disc = (x, cx, cy, r) => { x.beginPath(); x.arc(cx, cy, r, 0, 6.2832); };
+const pipeMetal = () => METALS[P.metal === 1 ? 0 : 1];   // copper pipes (brass ones on copper plates)
+function pipePath(x, pts) {                      // rounded elbows
+  x.beginPath(); x.moveTo(pts[0], pts[1]);
+  for (let i = 2; i + 2 < pts.length; i += 2) x.arcTo(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], 9);
+  x.lineTo(pts[pts.length - 2], pts[pts.length - 1]);
+}
+
+function buildStatic(geo, cw, ch, s) {
+  const c = makeCanvas(cw, ch), x = c.getContext('2d'), M = METALS[P.metal], PM = pipeMetal(), brass = METALS[0];
+  x.setTransform(s, 0, 0, s, 0, 0);
+  // bench: dark wooden planks with grain, a few nails
+  for (let p = 0, PH = 62; p * PH < H; p++) {
+    const tone = hash2(p, 0, 81), y0 = p * PH;
+    x.fillStyle = `rgb(${46 + 14 * tone | 0},${28 + 9 * tone | 0},${19 + 6 * tone | 0})`;
+    x.fillRect(0, y0, W, PH);
+    x.lineWidth = 1;
+    for (let k = 0; k < 13; k++) {
+      const gy = y0 + 3 + (PH - 6) * hash2(p, k, 82), amp = 1 + 3 * hash2(p, k, 83), f = 0.004 + 0.008 * hash2(p, k, 84), ph = hash2(p, k, 85) * 6.28;
+      x.strokeStyle = hash2(p, k, 86) < 0.7 ? 'rgba(18,9,5,0.3)' : 'rgba(130,86,52,0.16)';
+      x.beginPath();
+      for (let xx = 0; xx <= W + 40; xx += 40) x.lineTo(xx, gy + Math.sin(xx * f + ph) * amp);
+      x.stroke();
+    }
+    x.fillStyle = 'rgba(8,4,2,0.75)'; x.fillRect(0, y0 + PH - 2, W, 2);
+    x.fillStyle = 'rgba(160,110,70,0.13)'; x.fillRect(0, y0, W, 1);
+    for (let k = 0; k * 420 < W; k++) {
+      const nx = 60 + k * 420 + 300 * hash2(p, k, 87);
+      x.fillStyle = 'rgba(8,4,2,0.8)'; x.fillRect(nx, y0, 2, PH);
+      for (const ny of [y0 + 10, y0 + PH - 12]) for (const dx of [-9, 11]) {
+        x.fillStyle = '#1a1512'; disc(x, nx + dx, ny, 2.4); x.fill();
+        x.fillStyle = 'rgba(190,180,170,0.35)'; disc(x, nx + dx - 0.6, ny - 0.6, 1); x.fill();
+      }
+    }
+  }
+
+  // plates: shadow, metal, brushed lines, stains, bevel, a groove along the edge, rivets
+  const plate = geo.plate;
+  x.save(); x.filter = `blur(${Math.max(1, Math.round(5 * s))}px)`; x.translate(5, 7); x.fillStyle = 'rgba(0,0,0,0.55)'; x.fill(plate, 'evenodd'); x.restore();
+  const pg = x.createLinearGradient(0, 0, W, H);
+  pg.addColorStop(0, M.plate[0]); pg.addColorStop(0.5, M.plate[1]); pg.addColorStop(1, M.plate[2]);
+  x.fillStyle = pg; x.fill(plate, 'evenodd');
+  x.save(); x.clip(plate, 'evenodd');
+  x.fillStyle = sharpPattern(x, s, 64, (g, S) => {
+    const r = mulberry32(7);
+    for (let i = 0; i < 46; i++) { g.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)'; g.fillRect(0, Math.floor(r() * S), S, 1); }
+  });
+  x.fillRect(0, 0, W, H);
+  for (let i = 0, n = Math.round(W * H / 26000); i < n; i++) {     // stains of age
+    const sx = hash2(i, 1, 91) * W, sy = hash2(i, 2, 91) * H, sr = 30 + 90 * hash2(i, 3, 91);
+    const g = x.createRadialGradient(sx, sy, 0, sx, sy, sr);
+    g.addColorStop(0, hash2(i, 4, 91) < 0.6 ? 'rgba(20,12,6,0.2)' : 'rgba(120,200,170,0.07)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.fillRect(sx - sr, sy - sr, sr * 2, sr * 2);
+  }
+  const band = (dx, dy, color) => {                // the part of the plate not covered by itself shifted by (dx, dy): a rim on the opposite side
+    const p = new Path2D(); p.rect(-60, -60, W + 120, H + 120);
+    p.addPath(plate, new DOMMatrix([1, 0, 0, 1, dx, dy]));
+    x.fillStyle = color; x.fill(p, 'evenodd');
+  };
+  band(3, 4, 'rgba(255,240,200,0.3)'); band(1.2, 1.6, 'rgba(255,250,225,0.5)'); band(-3, -4, 'rgba(0,0,0,0.38)');
+  x.lineJoin = 'round';                            // a darker frame along the edge (half of a wide stroke, the rest is clipped away): the rivets sit on it
+  x.lineWidth = 36; x.strokeStyle = 'rgba(0,0,0,0.32)'; x.stroke(plate);
+  x.restore();
+  x.lineWidth = 1; x.strokeStyle = 'rgba(12,8,4,0.7)'; x.stroke(plate);
+  for (const [rx, ry] of geo.rivets) {
+    x.fillStyle = 'rgba(0,0,0,0.4)'; disc(x, rx + 1, ry + 1.4, 3.4); x.fill();
+    const g = x.createRadialGradient(rx - 1, ry - 1.2, 0.3, rx, ry, 3.2);
+    g.addColorStop(0, M.hi); g.addColorStop(0.6, M.plate[1]); g.addColorStop(1, M.plate[2]);
+    x.fillStyle = g; disc(x, rx, ry, 3); x.fill();
+  }
+
+  // pipes: shadow, dark edge, body, highlight; then their fittings
+  x.lineCap = 'butt'; x.lineJoin = 'round';
+  for (const p of geo.pipes) {
+    x.save(); x.translate(3, 5); x.lineWidth = 11; x.strokeStyle = 'rgba(0,0,0,0.42)'; pipePath(x, p.pts); x.stroke(); x.restore();
+    x.lineWidth = 11; x.strokeStyle = PM.lo; pipePath(x, p.pts); x.stroke();
+    x.lineWidth = 8; x.strokeStyle = PM.mid; pipePath(x, p.pts); x.stroke();
+    x.save(); x.translate(-1.6, -1.8); x.lineWidth = 2.2; x.strokeStyle = PM.hi; x.globalAlpha = 0.75; pipePath(x, p.pts); x.stroke(); x.restore();
+    for (const [jx, jy, ux, uy] of p.joints) {     // flange: a band across the pipe with two bolts
+      x.save(); x.translate(jx, jy); x.rotate(Math.atan2(uy, ux));
+      x.fillStyle = 'rgba(0,0,0,0.35)'; x.fillRect(-2.5, -6.5, 8, 16);
+      const g = x.createLinearGradient(0, -8, 0, 8); g.addColorStop(0, brass.hi); g.addColorStop(0.5, brass.mid); g.addColorStop(1, brass.lo);
+      x.fillStyle = g; x.fillRect(-3.5, -8, 7, 16);
+      x.fillStyle = 'rgba(20,12,4,0.8)'; disc(x, 0, -5.4, 1.1); x.fill(); disc(x, 0, 5.4, 1.1); x.fill();
+      x.restore();
+    }
+  }
+  for (const [vx, vy] of geo.valves) {             // valve: a red hand wheel seen from above
+    x.fillStyle = 'rgba(0,0,0,0.4)'; disc(x, vx + 3, vy + 4, 12); x.fill();
+    x.lineWidth = 3.4; x.strokeStyle = '#7d1f18'; disc(x, vx, vy, 10); x.stroke();
+    x.lineWidth = 2; x.strokeStyle = '#c9463a'; disc(x, vx - 0.5, vy - 0.6, 10); x.stroke();
+    x.lineWidth = 2.4; x.strokeStyle = '#a83228'; x.beginPath(); x.moveTo(vx - 9, vy); x.lineTo(vx + 9, vy); x.moveTo(vx, vy - 9); x.lineTo(vx, vy + 9); x.stroke();
+    x.fillStyle = brass.mid; disc(x, vx, vy, 3.2); x.fill(); x.fillStyle = brass.hi; disc(x, vx - 0.8, vy - 0.8, 1.4); x.fill();
+  }
+  for (const g of geo.gauges) {                    // pressure gauge: bezel, cream dial, ticks, red zone (the needle is drawn every frame)
+    x.fillStyle = 'rgba(0,0,0,0.45)'; disc(x, g.x + 3, g.y + 5, 18); x.fill();
+    const bz = x.createRadialGradient(g.x - 5, g.y - 6, 2, g.x, g.y, 18);
+    bz.addColorStop(0, brass.hi); bz.addColorStop(0.7, brass.mid); bz.addColorStop(1, brass.lo);
+    x.fillStyle = bz; disc(x, g.x, g.y, 17.5); x.fill();
+    x.fillStyle = '#efe6cf'; disc(x, g.x, g.y, 13.5); x.fill();
+    x.lineWidth = 2.2; x.strokeStyle = '#b8382c'; x.beginPath(); x.arc(g.x, g.y, 11, -0.35, 0.62); x.stroke();
+    x.lineWidth = 1; x.strokeStyle = '#3a2a1a'; x.beginPath();
+    for (let k = 0; k <= 8; k++) { const a = Math.PI * 0.8 + k / 8 * Math.PI * 1.4; x.moveTo(g.x + Math.cos(a) * 9, g.y + Math.sin(a) * 9); x.lineTo(g.x + Math.cos(a) * 12.4, g.y + Math.sin(a) * 12.4); }
+    x.stroke();
+  }
+  // gear shadows: the gears turn but their shadows barely change, so they are part of the static layer
+  x.save(); x.filter = `blur(${Math.max(1, Math.round(3 * s))}px)`; x.fillStyle = 'rgba(0,0,0,0.5)';
+  for (const g of geo.gears) { disc(x, g.x + 4, g.y + 6, g.R + 4); x.fill(); }
+  x.restore();
+  for (const g of geo.gears) { x.fillStyle = '#17110d'; disc(x, g.x, g.y, Math.max(3, g.R * 0.14)); x.fill(); }   // axle seat, seen through the spokes
+  const vg = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.8);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+  x.fillStyle = vg; x.fillRect(0, 0, W, H);
+  return c;
+}
+
+/* ======================================================================
+   Sprites and moving things
+   ====================================================================== */
+// One gear, teeth centered on angle 0, 1/n turn, … Drawn once per (teeth, metal, style, scale); shaded only radially, so it can be rotated freely
+const gearSprites = new Map();
+function gearSprite(n, metal, style) {
+  const s = cv._scale, key = n + '|' + metal + '|' + style + '|' + s;
+  let sp = gearSprites.get(key);
+  if (sp) return sp;
+  if (gearSprites.size > 400) gearSprites.clear();
+  const R = gearR(n), Ro = R + 5, Rr = R - 5.5, half = Math.ceil((Ro + 2) * s), c = makeCanvas(half * 2, half * 2), x = c.getContext('2d'), M = METALS[metal], step = 6.2832 / n;
+  x.translate(half, half); x.scale(s, s);
+  x.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a = i * step;
+    for (const [da, rr] of [[-0.31, Rr], [-0.15, Ro], [0.15, Ro], [0.31, Rr]]) x.lineTo(Math.cos(a + da * step) * rr, Math.sin(a + da * step) * rr);
+  }
+  x.closePath();
+  const g = x.createRadialGradient(0, 0, Rr * 0.15, 0, 0, Ro);
+  g.addColorStop(0, M.hi); g.addColorStop(0.3, M.mid); g.addColorStop(0.78, M.mid); g.addColorStop(0.9, M.hi); g.addColorStop(1, M.mid);
+  x.fillStyle = g; x.fill();
+  x.lineWidth = 1; x.strokeStyle = M.lo; x.stroke();
+  x.lineWidth = 1.2; x.strokeStyle = 'rgba(0,0,0,0.42)'; disc(x, 0, 0, Rr - 2.5); x.stroke();
+  x.strokeStyle = 'rgba(255,255,255,0.28)'; disc(x, 0, 0, Rr - 3.8); x.stroke();
+  const hub = Math.max(4, R * 0.24);
+  if (n >= 13) {                                   // windows between the spokes
+    const k = style < 0.35 ? 4 : style < 0.7 ? 5 : 6, r0 = hub + 3, r1 = Rr - 7, w = Math.max(2.4, R * 0.085);
+    const g0 = Math.asin(Math.min(0.95, w / r0)), g1 = Math.asin(w / r1), sector = 6.2832 / k;
+    if (r1 - r0 > 5 && sector - 2 * g0 > 0.2) {
+      const win = new Path2D();
+      for (let i = 0; i < k; i++) {
+        const a0 = i * sector, a1 = a0 + sector;
+        win.moveTo(Math.cos(a0 + g1) * r1, Math.sin(a0 + g1) * r1);
+        win.arc(0, 0, r1, a0 + g1, a1 - g1); win.arc(0, 0, r0, a1 - g0, a0 + g0, true); win.closePath();
+      }
+      x.globalCompositeOperation = 'destination-out'; x.fill(win); x.globalCompositeOperation = 'source-over';
+      x.lineWidth = 1.4; x.strokeStyle = M.lo; x.stroke(win);
+    }
+  }
+  const hg = x.createRadialGradient(-hub * 0.3, -hub * 0.35, 0.5, 0, 0, hub);
+  hg.addColorStop(0, M.hi); hg.addColorStop(0.7, M.mid); hg.addColorStop(1, M.lo);
+  x.fillStyle = hg; disc(x, 0, 0, hub); x.fill();
+  x.lineWidth = 1; x.strokeStyle = M.lo; x.stroke();
+  x.fillStyle = '#1d1712'; x.beginPath();
+  for (let i = 0; i < 6; i++) x.lineTo(Math.cos(i * 1.0472) * hub * 0.42, Math.sin(i * 1.0472) * hub * 0.42);
+  x.fill();
+  sp = { c, half: half / s };
+  gearSprites.set(key, sp);
+  return sp;
+}
+const metalOf = g => g.m < 0.5 ? P.metal : [0, 1, 2, 3].filter(k => k !== P.metal)[(g.m - 0.5) * 6 | 0];
+function softSprite(inner) {
+  const S = 96, c = makeCanvas(S, S), x = c.getContext('2d'), g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, inner); g.addColorStop(0.45, inner.replace(/[\d.]+\)$/, '0.22)')); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, S, S);
+  return c;
+}
+const PUFF = softSprite('rgba(255,250,240,0.6)');
+
+let gearT = 0, puffs = [];
+function stepGears(geo) {                        // seeds turn on their own; a child follows its parent through the tooth counts
+  for (const g of geo.gears) {
+    g.phi = g.parent ? g.al + Math.PI - Math.PI / g.n + (g.al - g.parent.phi) * g.parent.n / g.n : g.ph0 + g.w * gearT;
+  }
+}
+function step(dt) {
+  gearT += dt * P.speed;
+  if (geoNew) {
+    const vents = geoNew.vents, active = Math.round(P.steam * Math.min(vents.length, 14));
+    for (let i = 0; i < active; i++) {
+      const v = vents[i];
+      v.next -= dt;
+      if (v.next > 0) continue;
+      v.next = 2.5 + Math.random() * 6 / (0.3 + P.steam);
+      for (let k = 0; k < 5; k++) puffs.push({ x: v.x, y: v.y, vx: -8 + Math.random() * 16, vy: -26 - Math.random() * 22, age: -k * 0.09, life: 1.6 + Math.random() * 1.2, r: 7 + Math.random() * 6 });
+    }
+  }
+  for (const p of puffs) { p.age += dt; if (p.age > 0) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy *= 1 - 0.6 * dt; } }
+  if (puffs.length > 160) puffs.splice(0, puffs.length - 160);
+  puffs = puffs.filter(p => p.age < p.life);
+  stepAirship(dt);
+}
+
+// Airship: drifts across now and then, high above everything; its shadow falls on the bench
+let airship = null, airshipWait = PREVIEW ? 4 : 10 + Math.random() * 15;
+function stepAirship(dt) {
+  if (!P.airship) { airship = null; return; }
+  if (!airship) {
+    airshipWait -= dt;
+    if (airshipWait > 0) return;
+    const fromLeft = Math.random() < 0.5, A = [fromLeft ? -220 : W + 220, H * (0.12 + 0.6 * Math.random())], B = [fromLeft ? W + 220 : -220, H * (0.12 + 0.6 * Math.random())];
+    airship = { A, B, t: 0, dur: Math.hypot(B[0] - A[0], B[1] - A[1]) / 46, size: 150 + Math.random() * 60, x: A[0], y: A[1], ang: Math.atan2(B[1] - A[1], B[0] - A[0]) };
+  }
+  const a = airship;
+  a.t += dt / a.dur;
+  if (a.t >= 1) { airship = null; airshipWait = PREVIEW ? 14 + Math.random() * 10 : 40 + Math.random() * 60; return; }
+  a.x = a.A[0] + (a.B[0] - a.A[0]) * a.t; a.y = a.A[1] + (a.B[1] - a.A[1]) * a.t + Math.sin(a.t * 14) * 6;
+}
+function drawAirship(x, a, shadow, t) {
+  x.save(); x.translate(a.x, a.y); x.rotate(a.ang); const k = a.size / 170; x.scale(k, k);
+  const hull = () => { x.beginPath(); x.moveTo(88, 0); x.bezierCurveTo(70, -32, -40, -34, -84, -8); x.lineTo(-84, 8); x.bezierCurveTo(-40, 34, 70, 32, 88, 0); x.closePath(); };
+  const fins = () => { x.beginPath(); x.moveTo(-58, -10); x.lineTo(-104, -34); x.lineTo(-96, -6); x.lineTo(-96, 6); x.lineTo(-104, 34); x.lineTo(-58, 10); x.closePath(); };
+  if (shadow) { x.fillStyle = 'rgba(0,0,0,0.3)'; fins(); x.fill(); hull(); x.fill(); x.restore(); return; }
+  x.fillStyle = '#6a2c20'; fins(); x.fill(); x.lineWidth = 1; x.strokeStyle = '#2c120c'; x.stroke();
+  for (const sg of [-1, 1]) {                      // engine outriggers with spinning propellers (a blurred disc and two blades)
+    x.strokeStyle = '#3a2a1c'; x.lineWidth = 3; x.beginPath(); x.moveTo(-14, 20 * sg); x.lineTo(-22, 44 * sg); x.stroke();
+    x.fillStyle = '#8a6a3a'; x.beginPath(); x.ellipse(-22, 44 * sg, 9, 4.5, 0, 0, 6.29); x.fill();
+    x.fillStyle = 'rgba(230,220,200,0.22)'; x.beginPath(); x.ellipse(-33, 44 * sg, 2.5, 13, 0, 0, 6.29); x.fill();
+    x.strokeStyle = 'rgba(40,30,20,0.6)'; x.lineWidth = 1.6; const b = Math.sin(t * 30 + sg) * 12;
+    x.beginPath(); x.moveTo(-33, 44 * sg - b); x.lineTo(-33, 44 * sg + b); x.stroke();
+  }
+  hull();
+  const g = x.createLinearGradient(0, -32, 0, 32);
+  g.addColorStop(0, '#8a7a58'); g.addColorStop(0.3, '#e6d6ac'); g.addColorStop(0.55, '#cbb98c'); g.addColorStop(1, '#6e5f42');
+  x.fillStyle = g; x.fill();
+  x.save(); x.clip();
+  x.fillStyle = 'rgba(122,38,30,0.6)';             // burgundy bands
+  for (const bx of [-52, -6, 40]) x.fillRect(bx, -40, 14, 80);
+  x.strokeStyle = 'rgba(60,45,25,0.4)'; x.lineWidth = 1;
+  for (let bx = -70; bx <= 76; bx += 14.5) { x.beginPath(); x.moveTo(bx, -40); x.quadraticCurveTo(bx + 5, 0, bx, 40); x.stroke(); }
+  x.restore();
+  x.strokeStyle = '#3a2c18'; x.lineWidth = 1.2; hull(); x.stroke();
+  x.strokeStyle = 'rgba(255,250,230,0.5)'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(-70, -9); x.quadraticCurveTo(0, -17, 72, -5); x.stroke();
+  x.restore();
+}
+
+/* ======================================================================
+   Frame
+   ====================================================================== */
+let geoOld = null, geoNew = null, morphT0 = -1e9, morphDur = MORPH_MS;
+function commit(fromEmpty = false) {
+  const g = buildGeometry();
+  geoOld = fromEmpty ? null : geoNew; geoNew = g;
+  morphT0 = performance.now(); morphDur = fromEmpty ? 2000 : MORPH_MS;
+  puffs.length = 0;
+  if (paused || !previewMotion) { morphT0 = -1e9; draw(performance.now()); }   // paused: show the final state right away
+}
+let rebuildT = 0;
+function rebuildSoon() { clearTimeout(rebuildT); rebuildT = setTimeout(() => commit(false), PREVIEW ? 40 : 160); }
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // Preview mode: the page is laid out at the full desktop size and then scaled down as a whole, so the canvas only needs a low resolution
+  const scale = PREVIEW ? 0.45 : devicePixelRatio || 1;
+  // Use the size the canvas actually occupies (with decimals), otherwise the browser rescales the whole picture and blurs it
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+}
+
+const T0 = performance.now();
+let lastT = 0, frameN = 0;
+let previewMotion = !PREVIEW, hostDragging = false;
+let paused = false;                              // host notification: a maximized / fullscreen window hides this monitor → pause
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!window.dynamicDesktopRecording && (paused || !previewMotion)) { lastT = 0; return; }
+  const interval = hostDragging ? 100 : !PREVIEW && now - morphT0 < morphDur ? 1000 / 60 : 1000 / 30;
+  if (P.cap30 && now - lastT < interval - 2) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  lastT = now;
+  step(dt);
+  draw(now);
+  frameN++;
+}
+function drawGears(geo, alpha, s) {
+  stepGears(geo);
+  ctx.globalAlpha = alpha;
+  for (const g of geo.gears) {
+    const sp = gearSprite(g.n, metalOf(g), g.style), cs = Math.cos(g.phi) * s, sn = Math.sin(g.phi) * s;
+    ctx.setTransform(cs, sn, -sn, cs, g.x * s, g.y * s);
+    ctx.drawImage(sp.c, -sp.half, -sp.half, sp.half * 2, sp.half * 2);
+  }
+}
+function draw(now) {
+  const s = cv._scale, t = (now - T0) / 1000, e = Math.min(Math.max((now - morphT0) / morphDur, 0), 1), k = e * e * (3 - 2 * e);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!geoNew) { ctx.fillStyle = '#24160f'; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  // the static layers are opaque: the old one (or the bare bench color) first, the new one fading in on top
+  if (e < 1) {
+    if (geoOld) ctx.drawImage(cached(geoOld.rasters, (w, h, q) => buildStatic(geoOld, w, h, q)), 0, 0);
+    else { ctx.fillStyle = '#24160f'; ctx.fillRect(0, 0, cv.width, cv.height); }
+    ctx.globalAlpha = k;
+  }
+  ctx.drawImage(cached(geoNew.rasters, (w, h, q) => buildStatic(geoNew, w, h, q)), 0, 0);
+  if (airship) { ctx.globalAlpha = 1; ctx.setTransform(s, 0, 0, s, 0, 0); drawAirship(ctx, { ...airship, x: airship.x + 70, y: airship.y + 110 }, true, t); }
+  if (geoOld && e < 1) drawGears(geoOld, 1 - k, s);
+  drawGears(geoNew, e < 1 ? k : 1, s);
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.globalAlpha = e < 1 ? k : 1;
+  ctx.lineCap = 'round';
+  for (const g of geoNew.gauges) {               // needles tremble around their level
+    const v = g.level + 0.16 * Math.sin(t * 0.7 * P.speed + g.ph) + 0.035 * Math.sin(t * 9 * P.speed + g.ph * 3);
+    const a = Math.PI * 0.8 + Math.min(1, Math.max(0, v)) * Math.PI * 1.4;
+    ctx.lineWidth = 1.6; ctx.strokeStyle = '#1a120c';
+    ctx.beginPath(); ctx.moveTo(g.x - Math.cos(a) * 3, g.y - Math.sin(a) * 3); ctx.lineTo(g.x + Math.cos(a) * 11, g.y + Math.sin(a) * 11); ctx.stroke();
+    ctx.fillStyle = '#7a5a1e'; ctx.beginPath(); ctx.arc(g.x, g.y, 2.2, 0, 6.29); ctx.fill();
+  }
+  for (const p of puffs) {                         // steam: rises, swells and fades
+    if (p.age <= 0) continue;
+    const u = p.age / p.life, r = p.r * (1 + 3.2 * u);
+    ctx.globalAlpha = 0.75 * (1 - u) * Math.min(1, u * 8);
+    ctx.drawImage(PUFF, p.x - r, p.y - r, r * 2, r * 2);
+  }
+  ctx.globalAlpha = 1;
+  if (airship) drawAirship(ctx, airship, false, t);
+}
+
+/* ======================================================================
+   Hosted mode: the scene is driven from outside
+   - Wallpaper mode (?wallpaper=1): the desktop host sends messages through WebView2
+   - Preview mode (?preview=1): the settings window sends messages through the iframe's postMessage
+   Messages: icons (real icon rectangles, physical pixels) / settings (parameters, partial update) / reset (restore defaults) / pause
+   ====================================================================== */
+let iconsSeen = false;
+function reseed(v) {
+  seed = v;
+  if (iconsSeen) commit(true);
+}
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // "Refresh" in the settings window: new machine (desktop and preview use the same seed)
+  let geometry = false, redraw = false;
+  for (const k in v) {
+    const r = RANGES[k];
+    if (!r || typeof v[k] !== 'number' || !Number.isFinite(v[k])) continue;
+    const val = Math.min(r[1], Math.max(r[0], r[2] ? Math.round(v[k]) : v[k]));
+    if (P[k] === val) continue;
+    P[k] = val;
+    if (GEOMETRY_KEYS.includes(k)) geometry = true;
+    if (k === 'metal') redraw = true;              // the cached layers are kept per metal: nothing to rebuild
+    if (k === 'airship' && val) airshipWait = Math.min(airshipWait, 2);   // just switched on: show it soon
+  }
+  if (geometry && iconsSeen) rebuildSoon();
+  else if (redraw && (paused || !previewMotion) && iconsSeen) draw(performance.now());
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  if (PREVIEW) document.body.classList.add('ghosts');
+  let first = true;
+  const settlePaused = () => { if ((paused || !previewMotion) && iconsSeen) { morphT0 = -1e9; draw(performance.now()); } };
+  const handle = m => {
+    if (m.t === 'previewMotion' && PREVIEW) { previewMotion = !!m.v; settlePaused(); return; }
+    if (m.t === 'dragging') { hostDragging = !!m.v; return; }
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; settlePaused(); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical pixels → CSS pixels
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    clearTimeout(rebuildT);
+    commit(first);                                // first time: the machine fades in; afterwards: old and new scene cross-fade
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+// Opened directly in a browser: a sample desktop (for work on the theme); R = new machine
+function startStandalone() {
+  document.body.classList.add('ghosts');
+  const cell = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H, w: CELL_W, h: 92 });
+  icons = [];
+  for (let c = 0; c < 3; c++) for (let r = 0; r < Math.min(8, Math.floor((H - TASKBAR) / CELL_H)); r++) icons.push(cell(c, r));
+  for (const [c, r] of [[7, 1], [8, 1], [8, 2], [13, 4], [14, 4], [19, 0], [19, 1]]) if (GRID_X0 + (c + 1) * CELL_W < W) icons.push(cell(c, r));
+  drawGhosts();
+  iconsSeen = true;
+  commit(true);
+  addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0); });
+}
+
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) { commit(false); morphT0 = -1e9; } }, 100);
+});
+
+resize();
+if (WALL || PREVIEW) startHostedMode(); else startStandalone();
+requestAnimationFrame(frame);
+</script>
+<script src="community-effects.js"></script>
+<script src="share.js"></script>   <!-- Share image / share animation (sample icons, names as color blocks) -->
+</body>
+</html>

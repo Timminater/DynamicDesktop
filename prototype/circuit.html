@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DynamicDesktop · Circuit</title>
+<!--
+  circuit theme (tech; top view; Canvas 2D)
+  Art direction: a dark printed circuit board; the icons sit on copper pours, traces fan out from them at 45°, data pulses run along the traces
+  - Copper pours: the same icon field as the other themes, sampled on a coarse grid and traced with marching squares, which chamfers every corner at 45°
+  - Traces: routed on a 12px grid, only straight or 45° steps, never touching each other; every trace's random numbers come from its start cell,
+    so most of the board stays the same when only some icons move. Chips, small parts and silkscreen labels fill the free areas
+  - The board is static and cached at the screen's actual pixels (old and new board cross-fade when the icons move)
+  - Every frame only draws small things: pulses, via flashes, LEDs, a scan band (a strip of the cached glow layer) and sparse columns of falling hex digits
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #061018; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  /* Preview mode (?preview=1, inside the settings window) and standalone mode: translucent blocks mark where the icons are */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.ghosts #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.4); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="ghosts"></div>
+<!-- Community theme (GPL-3.0). See NOTICE for attribution. -->
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;   // desktop grid (also used by share.js)
+const STEP = 6;                                  // field grid (CSS px)
+const G = 12;                                    // routing grid (CSS px)
+const ZG = 24;                                   // copper-pour grid (CSS px): coarse, so the pour outline is made of long straight runs and 45° chamfers
+const MORPH_MS = 1200;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');                // wallpaper mode: loaded by the desktop host; messages come from the host
+const PREVIEW = QS.has('preview');               // preview mode: the preview (iframe) in the settings window; messages come from the parent page
+// Defaults must match the "default" values of the circuit theme in themes.json
+const P = { sigma: 46, density: 0.6, color: 1, pulses: 24, speed: 1, rain: 0.3, scan: 1, adaptive: 1, cap30: true };
+const DEFAULTS = Object.assign({}, P);
+// Accepted parameters: [min, max, integer]
+const RANGES = { sigma: [30, 140], density: [0, 1], color: [0, 3, 1], pulses: [0, 60, 1], speed: [0, 3], rain: [0, 1], scan: [0, 1, 1], adaptive: [0, 1, 1] };
+const GEOMETRY_KEYS = ['sigma', 'density', 'adaptive'];
+// Board colors: green (classic board), cyan, amber, magenta. glow = color of the signals
+const PALETTES = [
+  { bg: '#0b2a1b', bg2: '#04140c', trace: '#2f9460', pad: '#dcb95c', pour: '#124a2e', silk: '#e8f1ea', glow: [140, 255, 180] },
+  { bg: '#07141d', bg2: '#02070b', trace: '#187c96', pad: '#5cd8ec', pour: '#0b3140', silk: '#d6eef5', glow: [110, 240, 255] },
+  { bg: '#170f06', bg2: '#080502', trace: '#96621a', pad: '#f2b443', pour: '#3a250b', silk: '#f3e6d0', glow: [255, 196, 90] },
+  { bg: '#150a1c', bg2: '#07030a', trace: '#8730a0', pad: '#e276f2', pour: '#34123f', silk: '#f0dcf5', glow: [255, 120, 240] },
+];
+
+/* ======================================================================
+   Random numbers and noise (seeded: desktop and preview show the same board)
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+/* ======================================================================
+   Icon field (CPU): s = signed distance to the edge of the copper pour (<0 is inside), as in the other themes
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1;
+function computeField(rects) {
+  const N = Gw * Gh, f1 = new Float32Array(N), sig = P.sigma, is1 = 1 / (sig * sig);
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      let dx = Math.abs(gx * STEP - r.cx) - chw, dy = Math.abs(gy * STEP - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[gy * Gw + gx] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  return s;
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+// Outline of the pour: marching squares over inside/outside values on the coarse grid; crossing points are always edge midpoints,
+// so the outline only has horizontal, vertical and 45° runs. The grid is padded with "outside", so every outline is closed
+function pourPath(s) {
+  const gw = Math.ceil(W / ZG) + 3, gh = Math.ceil(H / ZG) + 3, V = new Int8Array(gw * gh);
+  for (let j = 1; j < gh - 1; j++) for (let i = 1; i < gw - 1; i++) V[j * gw + i] = sampleArr(s, (i - 1) * ZG, (j - 1) * ZG) < 0 ? 1 : 0;
+  const pos = new Map(), adj = new Map();
+  const link = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); };
+  const hk = (i, j) => { const k = (j * gw + i) * 2; pos.set(k, [(i - 0.5) * ZG, (j - 1) * ZG]); return k; };
+  const vk = (i, j) => { const k = (j * gw + i) * 2 + 1; pos.set(k, [(i - 1) * ZG, (j - 0.5) * ZG]); return k; };
+  for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
+    const code = V[j * gw + i] * 8 | V[j * gw + i + 1] * 4 | V[(j + 1) * gw + i + 1] * 2 | V[(j + 1) * gw + i];
+    if (code === 0 || code === 15) continue;
+    const E = [() => hk(i, j), () => vk(i + 1, j), () => hk(i, j + 1), () => vk(i, j)];   // top, right, bottom, left
+    const seg = (p, q) => link(E[p](), E[q]());
+    switch (code) {
+      case 1: case 14: seg(3, 2); break;
+      case 2: case 13: seg(2, 1); break;
+      case 3: case 12: seg(3, 1); break;
+      case 4: case 11: seg(0, 1); break;
+      case 6: case 9: seg(0, 2); break;
+      case 7: case 8: seg(3, 0); break;
+      case 5: seg(0, 3); seg(1, 2); break;         // diagonal neighbours stay joined
+      case 10: seg(0, 1); seg(2, 3); break;
+    }
+  }
+  const path = new Path2D(), used = new Set();
+  for (const start of adj.keys()) {
+    if (used.has(start)) continue;
+    let prev = -1, cur = start, first = true;
+    while (cur !== undefined && !used.has(cur)) {
+      used.add(cur);
+      const p = pos.get(cur);
+      if (first) path.moveTo(p[0], p[1]); else path.lineTo(p[0], p[1]);
+      first = false;
+      const nb = adj.get(cur), next = nb[0] !== prev ? nb[0] : nb[1];
+      prev = cur; cur = next;
+    }
+    path.closePath();
+  }
+  return path;
+}
+
+/* ======================================================================
+   Board geometry (CSS px; independent of the canvas resolution): pour, chips, traces, vias, small parts, labels
+   ====================================================================== */
+let icons = [];
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+const DX = [1, 1, 0, -1, -1, -1, 0, 1], DY = [0, 1, 1, 1, 0, -1, -1, -1];   // E, SE, S, SW, W, NW, N, NE
+const BLOCK = 65535;
+function buildGeometry() {
+  const s = computeField(P.adaptive ? iconRects() : []);
+  const cols = Math.ceil(W / G) + 1, rows = Math.ceil(H / G) + 1, occ = new Uint16Array(cols * rows);
+  const geo = { s, pour: pourPath(s), traces: [], vias: [], pads: [], chips: [], parts: [], labels: [], rasters: [], glows: [], total: 0 };
+  const X = c => c * G + G / 2, Y = r => r * G + G / 2;
+  const inside = (c, r) => c >= 0 && r >= 0 && c < cols && r < rows;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (sampleArr(s, X(c), Y(r)) < 16) occ[r * cols + c] = BLOCK;   // the pour and a clearance around it
+  const D = P.density;
+
+  // May trace `id` step from (c, r) in direction d? 0 no, 1 yes, 2 it leaves the board
+  // A trace keeps one empty cell between itself and every other trace (which also rules out crossing on diagonals)
+  const canStep = (id, c, r, d) => {
+    const nc = c + DX[d], nr = r + DY[d];
+    if (!inside(nc, nr)) return 2;
+    if (occ[nr * cols + nc]) return 0;
+    for (let k = 0; k < 8; k++) {
+      const qc = nc + DX[k], qr = nr + DY[k];
+      if (!inside(qc, qr)) continue;
+      const o = occ[qr * cols + qc];
+      if (o && o !== id && o !== BLOCK) return 0;
+    }
+    return 1;
+  };
+  // Route one trace from (c, r): runs of a few cells, then a 45° turn; when blocked it tries to go on straight or to turn 45°
+  const route = (c, r, dir, h, maxLen, from) => {
+    const id = geo.traces.length + 1;
+    if (id >= BLOCK || !inside(c, r) || occ[r * cols + c]) return false;
+    for (let k = 0; k < 8; k++) { const qc = c + DX[k], qr = r + DY[k]; if (inside(qc, qr)) { const o = occ[qr * cols + qc]; if (o && o !== BLOCK) return false; } }
+    const rnd = mulberry32((h * 4294967296) >>> 0), cells = [[c, r, dir]];
+    occ[r * cols + c] = id;
+    let run = 2 + (rnd() * 6 | 0), len = 0, out = false;
+    maxLen = Math.round(maxLen * (0.5 + rnd()));
+    while (len < maxLen && !out) {
+      let want = dir;
+      if (run <= 0) { want = (dir + (rnd() < 0.5 ? 1 : 7)) % 8; run = 2 + (rnd() * 9 | 0); }
+      let moved = false;
+      for (const d of [want, dir, (dir + 1) % 8, (dir + 7) % 8]) {
+        const st = canStep(id, c, r, d);
+        if (!st) continue;
+        c += DX[d]; r += DY[d]; dir = d; cells.push([c, r, d]); moved = true;
+        if (st === 2) out = true; else occ[r * cols + c] = id;
+        break;
+      }
+      if (!moved) break;
+      run--; len++;
+    }
+    if (cells.length < 3) { for (const [cc, rr] of cells) if (inside(cc, rr)) occ[rr * cols + cc] = 0; return false; }
+    // corner points only
+    const pts = [];
+    if (from) pts.push(from[0], from[1]);
+    cells.forEach(([cc, rr, d], i) => { if (i === 0 || i === cells.length - 1 || cells[i + 1][2] !== d) pts.push(X(cc), Y(rr)); });
+    const cum = [0];
+    for (let i = 2; i < pts.length; i += 2) cum.push(cum[cum.length - 1] + Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]));
+    const tr = { pts, cum, len: cum[cum.length - 1] };
+    geo.traces.push(tr); geo.total += tr.len;
+    if (!out) geo.vias.push([pts[pts.length - 2], pts[pts.length - 1]]);
+    if (!from) geo.vias.push([pts[0], pts[1]]);
+    return true;
+  };
+
+  // 1. Chips in the large free areas; a bundle of parallel traces leaves each side
+  const chipRnd = mulberry32(seed * 13 + 1);
+  for (let t = 0, want = Math.round(1 + 4 * D); t < 60 && geo.chips.length < want; t++) {
+    const wc = 6 + (chipRnd() * 5 | 0), hc = 6 + (chipRnd() * 5 | 0);
+    const c0 = 4 + (chipRnd() * (cols - wc - 8) | 0), r0 = 4 + (chipRnd() * (rows - hc - 8 - Math.ceil(TASKBAR / G)) | 0);
+    let free = c0 > 3 && r0 > 3;
+    for (let r = r0 - 4; free && r < r0 + hc + 4; r++) for (let c = c0 - 4; c < c0 + wc + 4; c++) if (!inside(c, r) || occ[r * cols + c]) { free = false; break; }
+    if (!free) continue;
+    for (let r = r0; r < r0 + hc; r++) for (let c = c0; c < c0 + wc; c++) occ[r * cols + c] = BLOCK;
+    const chip = { x: c0 * G, y: r0 * G, w: wc * G, h: hc * G, wc, hc, label: 'U' + (geo.chips.length + 1), code: ((chipRnd() * 65536) | 0).toString(16).toUpperCase().padStart(4, '0') };
+    geo.chips.push(chip);
+    const sides = [[6, c => [c0 + c, r0 - 1], wc], [2, c => [c0 + c, r0 + hc], wc], [4, r => [c0 - 1, r0 + r], hc], [0, r => [c0 + wc, r0 + r], hc]];
+    for (const [dir, at, n] of sides) {
+      if (chipRnd() > 0.35 + 0.6 * D) continue;
+      const h = chipRnd();
+      for (let k = 1; k < n - 1; k += 2) { const [c, r] = at(k); route(c, r, dir, h, 46, [X(c) - DX[dir] * G, Y(r) - DY[dir] * G]); }
+    }
+  }
+
+  // 2. Traces leaving the pour: start cells are free cells right next to it; neighbours two cells along the edge follow the same program (a bus)
+  const starts = new Map();
+  for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+    if (occ[r * cols + c]) continue;
+    const zone = (qc, qr) => occ[qr * cols + qc] === BLOCK && sampleArr(s, X(qc), Y(qr)) < 16;
+    const dir = zone(c - 1, r) ? 0 : zone(c + 1, r) ? 4 : zone(c, r - 1) ? 2 : zone(c, r + 1) ? 6 : -1;
+    if (dir >= 0) starts.set(r * cols + c, dir);
+  }
+  const order = [...starts.keys()].sort((a, b) => hash2(a % cols, (a / cols) | 0, 3) - hash2(b % cols, (b / cols) | 0, 3));
+  for (const key of order) {
+    const c = key % cols, r = (key / cols) | 0, dir = starts.get(key), h = hash2(c, r, 4);
+    if (hash2(c, r, 5) > 0.05 + 0.3 * D) continue;
+    const tx = -DY[dir], ty = DX[dir], n = 1 + (hash2(c, r, 6) * 4 | 0);
+    for (let k = 0; k < n; k++) {
+      const qc = c + tx * 2 * k, qr = r + ty * 2 * k;
+      if (starts.get(qr * cols + qc) !== dir) break;
+      const from = [X(qc) - DX[dir] * G * 2, Y(qr) - DY[dir] * G * 2];
+      if (route(qc, qr, dir, h, 44, from)) geo.pads.push(from);
+    }
+  }
+
+  // 3. Free traces between two vias
+  for (let i = 0, n = Math.round(D * cols * rows / 150); i < n; i++) {
+    const c = 1 + (hash2(i, 1, 7) * (cols - 2) | 0), r = 1 + (hash2(i, 2, 7) * (rows - 2) | 0);
+    route(c, r, hash2(i, 3, 7) * 8 | 0, hash2(i, 4, 7), 26, null);
+  }
+
+  // 4. Small parts (resistors, capacitors, LEDs) and their silkscreen names, where three cells in a row are still free with room around
+  const count = { R: 0, C: 0, D: 0 };
+  for (let i = 0, n = Math.round(D * cols * rows / 110); i < n; i++) {
+    const c = 2 + (hash2(i, 1, 8) * (cols - 6) | 0), r = 2 + (hash2(i, 2, 8) * (rows - 6) | 0), vert = hash2(i, 3, 8) < 0.5;
+    const wc = vert ? 1 : 3, hc = vert ? 3 : 1;
+    let free = true;
+    for (let rr = r - 1; free && rr <= r + hc; rr++) for (let cc = c - 1; cc <= c + wc; cc++) if (!inside(cc, rr) || occ[rr * cols + cc]) { free = false; break; }
+    if (!free) continue;
+    for (let rr = r; rr < r + hc; rr++) for (let cc = c; cc < c + wc; cc++) occ[rr * cols + cc] = BLOCK;
+    const k = hash2(i, 4, 8), kind = k < 0.5 ? 'R' : k < 0.82 ? 'C' : 'D';
+    const part = { x: c * G + wc * G / 2, y: r * G + hc * G / 2, vert, kind, ph: hash2(i, 5, 8) * 6.28, rate: 0.4 + 2.2 * hash2(i, 6, 8), red: hash2(i, 7, 8) < 0.35 };
+    geo.parts.push(part);
+    if (hash2(i, 8, 8) < 0.7) geo.labels.push({ x: part.x + (vert ? 9 : -16), y: part.y + (vert ? 3 : -8), text: kind + (++count[kind]) });
+  }
+  geo.leds = geo.parts.filter(p => p.kind === 'D');
+  return geo;
+}
+
+/* ======================================================================
+   Canvas and cached layers (drawn at the canvas's actual pixels; at most two sizes are kept: the screen and a share/recording size)
+   ====================================================================== */
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
+function cached(list, build) {
+  const w = cv.width, h = cv.height;
+  let hit = list.find(e => e.w === w && e.h === h && e.color === P.color);
+  if (!hit) { hit = { w, h, color: P.color, c: build(w, h, cv._scale) }; list.unshift(hit); if (list.length > 2) list.pop(); }
+  return hit.c;
+}
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+function sharpPattern(x, s, size, paint) {       // a pattern drawn at the actual pixels (the pattern matrix undoes the canvas scale)
+  const S = Math.max(2, Math.round(size * s)), c = makeCanvas(S, S), g = c.getContext('2d');
+  paint(g, S);
+  const pat = x.createPattern(c, 'repeat');
+  pat.setTransform(new DOMMatrix([size / S, 0, 0, size / S, 0, 0]));
+  return pat;
+}
+function strokeTraces(x, geo) {
+  x.beginPath();
+  for (const tr of geo.traces) { x.moveTo(tr.pts[0], tr.pts[1]); for (let i = 2; i < tr.pts.length; i += 2) x.lineTo(tr.pts[i], tr.pts[i + 1]); }
+  x.stroke();
+}
+function buildBoard(geo, cw, ch, s) {
+  const pal = PALETTES[P.color], c = makeCanvas(cw, ch), x = c.getContext('2d');
+  x.setTransform(s, 0, 0, s, 0, 0);
+  const bg = x.createRadialGradient(W * 0.5, H * 0.45, 0, W * 0.5, H * 0.45, Math.max(W, H) * 0.75);
+  bg.addColorStop(0, pal.bg); bg.addColorStop(1, pal.bg2);
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  // glass-fibre weave and a faint dot grid on the routing pitch
+  x.fillStyle = sharpPattern(x, s, 6, (g, S) => { g.strokeStyle = 'rgba(255,255,255,0.028)'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, 0.5); g.lineTo(S, 0.5); g.moveTo(0.5, 0); g.lineTo(0.5, S); g.stroke(); });
+  x.fillRect(0, 0, W, H);
+  x.fillStyle = sharpPattern(x, s, 2 * G, (g, S) => { g.fillStyle = 'rgba(255,255,255,0.07)'; g.fillRect(Math.round(S / 4), Math.round(S / 4), Math.max(1, Math.round(s)), Math.max(1, Math.round(s))); });
+  x.fillRect(0, 0, W, H);
+
+  // copper pour under the icons: solid fill, 45° hatching, bright outline
+  x.fillStyle = pal.pour; x.fill(geo.pour, 'evenodd');
+  x.save(); x.clip(geo.pour, 'evenodd');
+  x.fillStyle = sharpPattern(x, s, 8, (g, S) => { g.strokeStyle = 'rgba(255,255,255,0.05)'; g.lineWidth = Math.max(1, s * 0.8); g.beginPath(); g.moveTo(-S, S); g.lineTo(S, -S); g.moveTo(0, S); g.lineTo(S, 0); g.moveTo(0, 2 * S); g.lineTo(2 * S, 0); g.stroke(); });
+  x.fillRect(0, 0, W, H);
+  x.lineWidth = 9; x.strokeStyle = rgba(pal.glow, 0.07); x.stroke(geo.pour);
+  x.restore();
+  x.lineWidth = 1.5; x.lineJoin = 'miter'; x.strokeStyle = pal.pad; x.globalAlpha = 0.75; x.stroke(geo.pour); x.globalAlpha = 1;
+  if (P.adaptive) {                                // silkscreen corner marks around every icon
+    x.strokeStyle = pal.silk; x.globalAlpha = 0.2; x.lineWidth = 1; x.beginPath();
+    for (const ic of icons) {
+      const l = ic.x + 3, t = ic.y + 3, r = ic.x + ic.w - 3, b = ic.y + ic.h - 3, k = 7;
+      x.moveTo(l, t + k); x.lineTo(l, t); x.lineTo(l + k, t); x.moveTo(r - k, t); x.lineTo(r, t); x.lineTo(r, t + k);
+      x.moveTo(r, b - k); x.lineTo(r, b); x.lineTo(r - k, b); x.moveTo(l + k, b); x.lineTo(l, b); x.lineTo(l, b - k);
+    }
+    x.stroke(); x.globalAlpha = 1;
+  }
+
+  // traces, vias and pads
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  x.lineWidth = 5.5; x.strokeStyle = 'rgba(0,0,0,0.32)'; strokeTraces(x, geo);
+  x.lineWidth = 2.5; x.strokeStyle = pal.trace; strokeTraces(x, geo);
+  x.lineWidth = 0.8; x.strokeStyle = 'rgba(255,255,255,0.16)'; x.save(); x.translate(-0.6, -0.6); strokeTraces(x, geo); x.restore();
+  for (const [vx, vy] of geo.vias) {
+    x.fillStyle = pal.pad; x.beginPath(); x.arc(vx, vy, 4.4, 0, 6.29); x.fill();
+    x.fillStyle = pal.bg2; x.beginPath(); x.arc(vx, vy, 1.8, 0, 6.29); x.fill();
+  }
+  x.fillStyle = pal.pad;
+  for (const [px, py] of geo.pads) x.fillRect(px - 3.5, py - 3.5, 7, 7);
+
+  // chips
+  x.font = '600 9px Consolas, "Cascadia Mono", monospace'; x.textBaseline = 'middle';
+  for (const ch of geo.chips) {
+    x.fillStyle = pal.pad; x.globalAlpha = 0.85;
+    for (let k = 0; k < ch.wc; k++) { x.fillRect(ch.x + k * G + 3.5, ch.y - 5, 5, 7); x.fillRect(ch.x + k * G + 3.5, ch.y + ch.h - 2, 5, 7); }
+    for (let k = 0; k < ch.hc; k++) { x.fillRect(ch.x - 5, ch.y + k * G + 3.5, 7, 5); x.fillRect(ch.x + ch.w - 2, ch.y + k * G + 3.5, 7, 5); }
+    x.globalAlpha = 1;
+    const g = x.createLinearGradient(ch.x, ch.y, ch.x + ch.w, ch.y + ch.h);
+    g.addColorStop(0, '#20252b'); g.addColorStop(1, '#0b0d10');
+    x.fillStyle = g; x.beginPath(); x.roundRect(ch.x + 1, ch.y + 1, ch.w - 2, ch.h - 2, 3); x.fill();
+    x.strokeStyle = 'rgba(255,255,255,0.12)'; x.lineWidth = 1; x.stroke();
+    x.fillStyle = 'rgba(255,255,255,0.3)'; x.beginPath(); x.arc(ch.x + 9, ch.y + 9, 2.2, 0, 6.29); x.fill();
+    x.fillStyle = 'rgba(235,240,245,0.5)'; x.textAlign = 'center';
+    x.fillText(ch.label, ch.x + ch.w / 2, ch.y + ch.h / 2 - 6); x.fillText(ch.code, ch.x + ch.w / 2, ch.y + ch.h / 2 + 6);
+    x.strokeStyle = pal.silk; x.globalAlpha = 0.28; x.strokeRect(ch.x - 9.5, ch.y - 9.5, ch.w + 19, ch.h + 19); x.globalAlpha = 1;
+  }
+  // small parts: two solder pads and a body
+  for (const p of geo.parts) {
+    x.save(); x.translate(p.x, p.y); if (p.vert) x.rotate(Math.PI / 2);
+    x.fillStyle = pal.pad; x.fillRect(-15, -4.5, 8, 9); x.fillRect(7, -4.5, 8, 9);
+    x.fillStyle = p.kind === 'R' ? '#15181c' : p.kind === 'C' ? '#9a7a52' : '#e9ebe4';
+    x.fillRect(-9, -4, 18, 8);
+    if (p.kind === 'R') { x.fillStyle = 'rgba(255,255,255,0.55)'; x.fillRect(-4, -1, 2, 2); x.fillRect(-1, -1, 2, 2); x.fillRect(2, -1, 2, 2); }
+    if (p.kind === 'D') { x.fillStyle = p.red ? '#ff7a6a' : rgba(pal.glow, 1); x.fillRect(-4, -2.5, 8, 5); }
+    x.restore();
+  }
+  x.font = '8px Consolas, "Cascadia Mono", monospace'; x.textAlign = 'left'; x.fillStyle = pal.silk; x.globalAlpha = 0.42;
+  for (const l of geo.labels) x.fillText(l.text, l.x, l.y);
+  x.globalAlpha = 1;
+  const vg = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.8);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+  x.fillStyle = vg; x.fillRect(0, 0, W, H);
+  return c;
+}
+// The same traces in the signal color on a transparent layer: strips of it are added on top for the scan band
+function buildGlow(geo, cw, ch, s) {
+  const pal = PALETTES[P.color], c = makeCanvas(cw, ch), x = c.getContext('2d');
+  x.setTransform(s, 0, 0, s, 0, 0);
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  x.lineWidth = 7; x.strokeStyle = rgba(pal.glow, 0.22); strokeTraces(x, geo);
+  x.lineWidth = 2.5; x.strokeStyle = rgba(pal.glow, 0.9); strokeTraces(x, geo);
+  x.fillStyle = rgba(pal.glow, 0.9);
+  for (const [vx, vy] of geo.vias) { x.beginPath(); x.arc(vx, vy, 4.4, 0, 6.29); x.fill(); }
+  x.lineWidth = 2; x.strokeStyle = rgba(pal.glow, 0.7); x.stroke(geo.pour);
+  return c;
+}
+
+/* ======================================================================
+   Sprites (per color) and moving things
+   ====================================================================== */
+function glowSprite(col, core) {
+  const S = 96, c = makeCanvas(S, S), x = c.getContext('2d'), g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, core); g.addColorStop(0.2, rgba(col, 0.6)); g.addColorStop(1, rgba(col, 0));
+  x.fillStyle = g; x.fillRect(0, 0, S, S);
+  return c;
+}
+const RED = [255, 96, 80];
+const sprites = [];                              // per color: { glow, red }
+function sprite() { return sprites[P.color] || (sprites[P.color] = { glow: glowSprite(PALETTES[P.color].glow, 'rgba(255,255,255,1)'), red: glowSprite(RED, 'rgba(255,240,230,1)') }); }
+// Hex digits at the actual pixels: row 0 in the signal color, row 1 nearly white (the head of a column)
+const HEX = '0123456789ABCDEF', atlases = [];
+function atlas() {
+  const s = cv._scale;
+  let a = atlases.find(e => e.s === s && e.color === P.color);
+  if (a) return a;
+  const cell = Math.ceil(16 * s), c = makeCanvas(cell * 16, cell * 2), x = c.getContext('2d'), col = PALETTES[P.color].glow;
+  x.font = `${Math.round(13 * s)}px Consolas, "Cascadia Mono", monospace`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  for (let i = 0; i < 16; i++) {
+    x.fillStyle = rgba(col, 1); x.fillText(HEX[i], i * cell + cell / 2, cell / 2);
+    x.fillStyle = rgba(col.map(v => Math.round(v + (255 - v) * 0.75)), 1); x.fillText(HEX[i], i * cell + cell / 2, cell + cell / 2);
+  }
+  a = { s, color: P.color, c, cell };
+  atlases.unshift(a); if (atlases.length > 3) atlases.pop();
+  return a;
+}
+
+let pulses = [], flashes = [], rain = [];
+function pickTrace(geo) {                        // longer traces carry more pulses
+  let d = Math.random() * geo.total;
+  for (const tr of geo.traces) { d -= tr.len; if (d <= 0) return tr; }
+  return geo.traces[geo.traces.length - 1];
+}
+function newPulse(geo, spread) {
+  const tr = pickTrace(geo), back = Math.random() < 0.5;
+  return { tr, back, d: spread ? Math.random() * tr.len : 0, v: 110 + Math.random() * 170, wait: spread ? 0 : Math.random() * 1.5 };
+}
+function syncPulses(reset) {
+  if (reset) pulses.length = 0;
+  const geo = geoNew, n = geo && geo.traces.length ? P.pulses : 0;
+  while (pulses.length > n) pulses.pop();
+  while (pulses.length < n) pulses.push(newPulse(geo, true));
+}
+function syncRain() {
+  const n = Math.round(P.rain * W / 60);
+  while (rain.length > n) rain.pop();
+  while (rain.length < n) rain.push(newColumn(true));
+}
+function newColumn(anywhere) {
+  const len = 8 + (Math.random() * 18 | 0);
+  return { x: (Math.random() * W / 16 | 0) * 16, y: anywhere ? Math.random() * (H + len * 16) : -Math.random() * 200, v: 70 + Math.random() * 110, len, k: Math.random() * 1000 | 0 };
+}
+function pointAt(tr, d, out) {
+  const cum = tr.cum;
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < d) i++;
+  const t = (d - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]), p = tr.pts;
+  out[0] = p[2 * i - 2] + (p[2 * i] - p[2 * i - 2]) * t; out[1] = p[2 * i - 1] + (p[2 * i + 1] - p[2 * i - 1]) * t;
+}
+function step(dt, now) {
+  const sp = P.speed;
+  for (let i = 0; i < pulses.length; i++) {
+    const p = pulses[i];
+    if (p.wait > 0) { p.wait -= dt * Math.max(sp, 0.2); continue; }
+    p.d += p.v * sp * dt;
+    if (p.d >= p.tr.len) {
+      const end = [0, 0]; pointAt(p.tr, p.back ? 0 : p.tr.len, end);
+      flashes.push({ x: end[0], y: end[1], t0: now });
+      if (flashes.length > 40) flashes.shift();
+      pulses[i] = newPulse(geoNew, false);
+    }
+  }
+  for (let i = 0; i < rain.length; i++) {
+    const c = rain[i];
+    c.y += c.v * sp * dt;
+    if (c.y - c.len * 16 > H) rain[i] = newColumn(false);
+  }
+}
+
+/* ======================================================================
+   Frame
+   ====================================================================== */
+let geoOld = null, geoNew = null, morphT0 = -1e9, morphDur = MORPH_MS;
+function commit(fromEmpty = false) {
+  const g = buildGeometry();
+  geoOld = fromEmpty ? null : geoNew; geoNew = g;
+  morphT0 = performance.now(); morphDur = fromEmpty ? 1800 : MORPH_MS;
+  syncPulses(true); flashes.length = 0;
+  if (paused || !previewMotion) { morphT0 = -1e9; draw(performance.now()); }   // paused: show the final state right away
+}
+let rebuildT = 0;
+function rebuildSoon() { clearTimeout(rebuildT); rebuildT = setTimeout(() => commit(false), PREVIEW ? 40 : 160); }
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // Preview mode: the page is laid out at the full desktop size and then scaled down as a whole, so the canvas only needs a low resolution
+  const scale = PREVIEW ? 0.45 : devicePixelRatio || 1;
+  // Use the size the canvas actually occupies (with decimals), otherwise the browser rescales the whole picture and blurs it
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+}
+
+const T0 = performance.now();
+let lastT = 0, frameN = 0;
+let previewMotion = !PREVIEW, hostDragging = false;
+let paused = false;                              // host notification: a maximized / fullscreen window hides this monitor → pause
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!window.dynamicDesktopRecording && (paused || !previewMotion)) { lastT = 0; return; }
+  const interval = hostDragging ? 100 : !PREVIEW && now - morphT0 < morphDur ? 1000 / 60 : 1000 / 30;
+  if (P.cap30 && now - lastT < interval - 2) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  lastT = now;
+  if (geoNew) step(dt, now);
+  draw(now);
+  frameN++;
+}
+const pt = [0, 0];
+function draw(now) {
+  const s = cv._scale, t = (now - T0) / 1000, e = Math.min(Math.max((now - morphT0) / morphDur, 0), 1), pal = PALETTES[P.color];
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!geoNew) { ctx.fillStyle = pal.bg2; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  // the boards are opaque: the old one (or the bare background) first, the new one fading in on top
+  if (e < 1) {
+    if (geoOld) ctx.drawImage(cached(geoOld.rasters, (w, h, k) => buildBoard(geoOld, w, h, k)), 0, 0);
+    else { ctx.fillStyle = pal.bg2; ctx.fillRect(0, 0, cv.width, cv.height); }
+    ctx.globalAlpha = e * e * (3 - 2 * e);
+  }
+  ctx.drawImage(cached(geoNew.rasters, (w, h, k) => buildBoard(geoNew, w, h, k)), 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'lighter';
+
+  if (P.scan) {                                    // scan band: strips of the glow layer, brightest in the middle
+    const glow = cached(geoNew.glows, (w, h, k) => buildGlow(geoNew, w, h, k));
+    const yc = ((t * 70 * Math.max(P.speed, 0.15)) % (H + 600)) - 300, N = 9, sh = 18;
+    for (let i = 0; i < N; i++) {
+      const y0 = Math.round((yc + (i - N / 2) * sh) * s), y1 = Math.round((yc + (i + 1 - N / 2) * sh) * s);
+      if (y1 <= 0 || y0 >= cv.height) continue;
+      const a = Math.max(0, y0), b = Math.min(cv.height, y1);
+      ctx.globalAlpha = 0.55 * Math.sin(Math.PI * (i + 0.5) / N) * e;
+      ctx.drawImage(glow, 0, a, cv.width, b - a, 0, a, cv.width, b - a);
+    }
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  if (rain.length) {                               // falling hex digits: fixed rows, the head is bright, the tail fades; never over the pour (the icons stay readable)
+    const at = atlas();
+    for (const c of rain) {
+      const head = Math.floor(c.y / 16);
+      for (let k = 0; k < c.len; k++) {
+        const row = head - k, y = row * 16;
+        if (y < -16 || y > H) continue;
+        if (sampleArr(geoNew.s, c.x + 8, y + 8) < 12) continue;
+        const gi = (row * 7 + c.k + ((t * 1.6 + row * 0.37 + c.k) | 0) * 5) & 15;
+        ctx.globalAlpha = k === 0 ? 0.8 : 0.42 * (1 - k / c.len);
+        ctx.drawImage(at.c, gi * at.cell, k === 0 ? at.cell : 0, at.cell, at.cell, c.x, y, 16, 16);
+      }
+    }
+  }
+  const sp = sprite();
+  for (const p of pulses) {                        // a bright head and a short fading tail along the trace
+    if (p.wait > 0) continue;
+    for (let k = 0; k < 8; k++) {
+      const d = p.d - k * 7;
+      if (d < 0) break;
+      pointAt(p.tr, p.back ? p.tr.len - d : d, pt);
+      const sz = k === 0 ? 20 : 15 - k;
+      ctx.globalAlpha = k === 0 ? 1 : 0.6 * (1 - k / 8);
+      ctx.drawImage(sp.glow, pt[0] - sz / 2, pt[1] - sz / 2, sz, sz);
+    }
+  }
+  for (const f of flashes) {                       // the via lights up when a pulse arrives
+    const age = (now - f.t0) / 600;
+    if (age < 0 || age >= 1) continue;
+    const sz = 22 + 30 * age;
+    ctx.globalAlpha = (1 - age) * (1 - age);
+    ctx.drawImage(sp.glow, f.x - sz / 2, f.y - sz / 2, sz, sz);
+  }
+  for (const l of geoNew.leds) {                   // LEDs blink, each at its own rate
+    const on = Math.sin(t * l.rate * Math.max(P.speed, 0.2) + l.ph);
+    if (on < 0.2) continue;
+    ctx.globalAlpha = 0.5 + 0.5 * on;
+    ctx.drawImage(l.red ? sp.red : sp.glow, l.x - 15, l.y - 15, 30, 30);
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   Hosted mode: the scene is driven from outside
+   - Wallpaper mode (?wallpaper=1): the desktop host sends messages through WebView2
+   - Preview mode (?preview=1): the settings window sends messages through the iframe's postMessage
+   Messages: icons (real icon rectangles, physical pixels) / settings (parameters, partial update) / reset (restore defaults) / pause
+   ====================================================================== */
+let iconsSeen = false;
+function reseed(v) {
+  seed = v;
+  if (iconsSeen) commit(true);
+}
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // "Refresh" in the settings window: new board (desktop and preview use the same seed)
+  let geometry = false, redraw = false;
+  for (const k in v) {
+    const r = RANGES[k];
+    if (!r || typeof v[k] !== 'number' || !Number.isFinite(v[k])) continue;
+    const val = Math.min(r[1], Math.max(r[0], r[2] ? Math.round(v[k]) : v[k]));
+    if (P[k] === val) continue;
+    P[k] = val;
+    if (GEOMETRY_KEYS.includes(k)) geometry = true;
+    if (k === 'pulses') syncPulses(false);
+    if (k === 'rain') syncRain();
+    if (k === 'color' || k === 'scan') redraw = true;
+  }
+  if (geometry && iconsSeen) rebuildSoon();
+  else if (redraw && (paused || !previewMotion) && iconsSeen) draw(performance.now());
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  if (PREVIEW) document.body.classList.add('ghosts');
+  let first = true;
+  const settlePaused = () => { if ((paused || !previewMotion) && iconsSeen) { morphT0 = -1e9; draw(performance.now()); } };
+  const handle = m => {
+    if (m.t === 'previewMotion' && PREVIEW) { previewMotion = !!m.v; settlePaused(); return; }
+    if (m.t === 'dragging') { hostDragging = !!m.v; return; }
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; settlePaused(); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical pixels → CSS pixels
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    clearTimeout(rebuildT);
+    commit(first);                                // first time: the board fades in; afterwards: old and new board cross-fade
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+// Opened directly in a browser: a sample desktop (for work on the theme); R = new board
+function startStandalone() {
+  document.body.classList.add('ghosts');
+  const cell = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H, w: CELL_W, h: 92 });
+  icons = [];
+  for (let c = 0; c < 3; c++) for (let r = 0; r < Math.min(8, Math.floor((H - TASKBAR) / CELL_H)); r++) icons.push(cell(c, r));
+  for (const [c, r] of [[7, 1], [8, 1], [8, 2], [13, 4], [14, 4], [19, 0], [19, 1]]) if (GRID_X0 + (c + 1) * CELL_W < W) icons.push(cell(c, r));
+  drawGhosts();
+  iconsSeen = true;
+  commit(true);
+  addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0); });
+}
+
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); rain.length = 0; syncRain(); if (iconsSeen) { commit(false); morphT0 = -1e9; } }, 100);
+});
+
+resize();
+syncRain();
+if (WALL || PREVIEW) startHostedMode(); else startStandalone();
+requestAnimationFrame(frame);
+</script>
+<script src="community-effects.js"></script>
+<script src="share.js"></script>   <!-- Share image / share animation (sample icons, names as color blocks) -->
+</body>
+</html>

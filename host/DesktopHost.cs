@@ -1,13 +1,10 @@
-// Deskland · 桌面宿主（原型）
-//
-// 做四件事：
-//   1. 把一个无边框窗口挂到桌面图标下面（壁纸层），里面用 WebView2 显示当前主题的页面（如 prototype/flat.html?wallpaper=1）
-//   0. 设置窗口（prototype/settings.html）：选主题、调参数，实时同步到壁纸并保存到 settings.json；一键分享（壁纸页面画一张打好马赛克的桌面图）
-//   2. 每 400ms 读取桌面图标的真实位置（桌面 ListView 的跨进程消息），有变化才发给页面
-//   3. 前台窗口最大化 / 全屏时暂停动画；托盘图标可以暂停、重新载入、退出（退出后恢复原壁纸）
-//   4. 资源管理器重建壁纸层时（例如按 Win+D），我们的窗口会被连带销毁 → 自动重新挂载
-//
-// 用 Windows 自带的 .NET Framework 编译器编译（C# 5 语法），见 build.ps1。
+// DynamicDesktop desktop host.
+// Embed a borderless WebView2 wallpaper beneath the desktop icons and synchronize
+// its settings with the settings window. Read icon positions through cross-process
+// ListView messages, pause for maximized or fullscreen windows, and expose tray
+// controls. Reattach if Explorer destroys the wallpaper layer. Sharing renders
+// an anonymized image in the wallpaper page.
+// Build with the Windows .NET Framework compiler (C# 5); see build.ps1.
 
 using System;
 using System.Diagnostics;
@@ -27,14 +24,14 @@ using Microsoft.Win32;
 
 static class Program
 {
-    public static readonly string ExitEventName = "DesklandHost_Exit" + InstallProfile.Suffix;
-    public static readonly string MenuEventName = "DesklandHost_Menu" + InstallProfile.Suffix;
-    public static readonly string SettingsEventName = "DesklandHost_Settings" + InstallProfile.Suffix;
+    public static readonly string ExitEventName = "DynamicDesktopHost_Exit" + InstallProfile.Suffix;
+    public static readonly string MenuEventName = "DynamicDesktopHost_Menu" + InstallProfile.Suffix;
+    public static readonly string SettingsEventName = "DynamicDesktopHost_Settings" + InstallProfile.Suffix;
 
-    // 通知正在运行的实例（退出 / 弹出菜单）
+    // Signal the running instance to exit or open a menu.
     static void Signal(string name)
     {
-        Native.AllowSetForegroundWindow(-1);            // 让运行中的实例能把菜单弹到最前面
+        Native.AllowSetForegroundWindow(-1);            // Allow the running instance to activate its menu.
         EventWaitHandle ev;
         if (EventWaitHandle.TryOpenExisting(name, out ev)) ev.Set();
     }
@@ -42,37 +39,37 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // Deskland.exe --exit ：通知正在运行的实例正常退出（恢复原壁纸）
-        // Deskland.exe --menu ：让正在运行的实例在鼠标位置弹出菜单
-        // Deskland.exe --settings ：让正在运行的实例打开设置窗口
-        if (args.Length > 0 && args[0] == "--exit") { Signal(ExitEventName); return; }
-        if (args.Length > 0 && args[0] == "--menu") { Signal(MenuEventName); return; }
-        if (args.Length > 0 && args[0] == "--settings") { Signal(SettingsEventName); return; }
+        // --exit closes the running instance; --menu opens its menu at the pointer;
+        // --settings opens its settings window.
+        if (Array.IndexOf(args, "--exit") >= 0) { Signal(ExitEventName); return; }
+        if (Array.IndexOf(args, "--menu") >= 0) { Signal(MenuEventName); return; }
+        if (Array.IndexOf(args, "--settings") >= 0) { Signal(SettingsEventName); return; }
         if (args.Length > 0 && args[0] == "--exit-installed") { Environment.ExitCode = InstallProfile.StopInstalled(); return; }
-        // Preview never migrates or shares the development edition's settings.                                 // 老名字（Habitat Wallpaper）下的数据目录、开机自启项搬过来
+        // Preview never migrates or shares the development edition's settings.
         bool fromAutostart = Array.IndexOf(args, "--autostart") >= 0;
-        if (fromAutostart) AutoStartCheck.MarkLaunched();  // 开机自启跑起来了（不管后面是不是已经在运行）
+        if (fromAutostart) AutoStartCheck.MarkLaunched();  // Record the launch even if another instance already runs.
         bool created;
-        var mutex = new Mutex(true, "DesklandHost_Singleton" + InstallProfile.Suffix, out created);
+        var mutex = new Mutex(true, "DynamicDesktopHost_Singleton" + InstallProfile.Suffix, out created);
         if (!created)
         {
-            if (!fromAutostart) Signal(SettingsEventName); // 已经在运行：再次双击程序 = 打开设置（开机自启那次就悄悄退出）
+            if (!fromAutostart) Signal(SettingsEventName); // A manual second launch opens settings.
             return;
         }
-        // 按物理像素工作：桌面图标坐标、屏幕尺寸都是物理像素
+        // Desktop icon coordinates and monitor bounds use physical pixels.
         if (!Native.SetProcessDpiAwarenessContext(new IntPtr(-4))) Native.SetProcessDPIAware();
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        // 任何意外都写进日志，不弹框也不静默退出
+        // Record unexpected exceptions instead of silently exiting.
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { Log.Write("未处理的异常：" + e.Exception); };
-        AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { Log.Write("致命异常：" + e.ExceptionObject); };
+        Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { Log.Write("Unhandled exception: " + e.Exception); };
+        AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { Log.Write("Fatal exception: " + e.ExceptionObject); };
         string exeDir = AppDomain.CurrentDomain.BaseDirectory;
         string pageDir = Path.GetFullPath(Path.Combine(exeDir, @"..\..\prototype"));
-        // 24H2+ 的挂法：默认做 Progman 的分层子窗口（换系统壁纸时会闪一下）；
-        //   --defview：挂进图标层里、图标列表之下（实验：实测画不出来）；--legacy：挂进 WorkerW（换壁纸时会被连带销毁）
+        // On Windows 11 24H2+, the default is a layered Progman child.
+        // --defview uses the icon layer (experimental and observed not to draw);
+        // --legacy uses WorkerW, which Explorer can destroy on wallpaper changes.
         string attach = "progman";
-        bool autostart = false;                           // --autostart：开机自动启动，不弹设置窗口
+        bool autostart = false;                           // --autostart starts without opening settings.
         foreach (string a in args)
         {
             if (a == "--legacy") attach = "legacy";
@@ -102,50 +99,8 @@ static class Log
     }
 }
 
-// 2026-10-10 改名（Habitat Wallpaper → Deskland）：老用户的东西照旧能用
-//   - 数据目录 %LOCALAPPDATA%\HabitatWallpaper（设置、开机自启的记录、WebView2 缓存）整个搬到 %LOCALAPPDATA%\Deskland；
-//     旧程序还开着、WebView2 的文件被占着搬不动时，只把设置这些小文件拷过去
-//   - 用户开着开机自启：注册表 Run 项里的 HabitatWallpaper 换成指向 Deskland.exe 的 Deskland（用户原来的选择照旧，不会替没开的人打开）
-static class Rename
-{
-    const string OldName = "HabitatWallpaper";
-    public static void Migrate()
-    {
-        string oldDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), OldName);
-        try
-        {
-            if (Directory.Exists(oldDir) && !Directory.Exists(Log.DataDir))
-            {
-                try { Directory.Move(oldDir, Log.DataDir); }
-                catch
-                {
-                    Directory.CreateDirectory(Log.DataDir);
-                    foreach (string src in Directory.GetFiles(oldDir))
-                        if (!src.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) File.Copy(src, Path.Combine(Log.DataDir, Path.GetFileName(src)), false);
-                }
-                Log.Write("改名：数据目录从 " + oldDir + " 搬到 " + Log.DataDir);
-            }
-        }
-        catch (Exception ex) { Log.Write("改名：搬数据目录失败：" + ex.Message); }
-        try
-        {
-            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(HostContext.RunKey, true))
-            {
-                if (k != null && k.GetValue(OldName) != null)
-                {
-                    k.DeleteValue(OldName, false);
-                    k.SetValue(HostContext.RunName, "\"" + Application.ExecutablePath + "\" --autostart");
-                    Log.Write("改名：开机自启的启动项 " + OldName + " 换成 " + HostContext.RunName);
-                }
-            }
-        }
-        catch (Exception ex) { Log.Write("改名：换开机自启的启动项失败：" + ex.Message); }
-    }
-}
-
-// 开机自启有没有被拦（比如被火绒、360 的"启动项管理"禁止了：注册表里的启动项还在，但登录时不让运行）：
-// 每次带 --autostart 启动时记下时间；用户手动打开程序时，如果开着开机自启、本次登录已经过了 3 分钟，
-// 却没有本次登录之后的自启记录 → 登录时那次没跑起来
+// Detect a blocked autostart: after three minutes from login, an enabled entry
+// without a launch timestamp for this session may have been blocked.
 static class AutoStartCheck
 {
     static string LastPath { get { return Path.Combine(Log.DataDir, "autostart.last"); } }
@@ -162,7 +117,7 @@ static class AutoStartCheck
     public static void MarkLaunched() { Stamp(LastPath); }
     public static void MarkEnabled() { Stamp(EnabledPath); }
 
-    // 本次登录的时间（UTC）：WTSQuerySessionInformation(WTSSessionInfo) 里的 LogonTime
+    // Current login time in UTC from WTSQuerySessionInformation(WTSSessionInfo).
     public static DateTime LogonTimeUtc()
     {
         IntPtr buf; int bytes;
@@ -172,33 +127,34 @@ static class AutoStartCheck
         finally { Native.WTSFreeMemory(buf); }
     }
 
-    // 正在运行的安全软件（只用来在提示里点名，方便用户去对的地方改）
+    // Identify running security software so the warning can name it.
     public static string SecuritySoftware()
     {
-        string[,] known = { { "HipsTray", "火绒" }, { "HipsDaemon", "火绒" }, { "360Tray", "360 安全卫士" }, { "360sd", "360 杀毒" },
-                            { "QQPCTray", "腾讯电脑管家" }, { "kxetray", "金山毒霸" }, { "2345SafeTray", "2345 安全卫士" } };
+        string[,] known = { { "HipsTray", "Huorong" }, { "HipsDaemon", "Huorong" }, { "360Tray", "360 Total Security" }, { "360sd", "360 Antivirus" },
+                            { "QQPCTray", "Tencent PC Manager" }, { "kxetray", "Kingsoft Antivirus" }, { "2345SafeTray", "2345 Security" } };
         for (int i = 0; i < known.GetLength(0); i++)
             if (Process.GetProcessesByName(known[i, 0]).Length > 0) return known[i, 1];
         return "";
     }
 
-    // 没问题返回 null；被拦了返回正在运行的安全软件名（没认出来是 ""），提示文字由设置页按界面语言拼
+    // Return null when healthy, or the security product name (possibly empty)
+    // when the launch appears blocked. The settings page localizes the warning.
     public static string Detect(bool autoStartOn)
     {
         if (!autoStartOn) return null;
         DateTime logon = LogonTimeUtc();
-        if (logon == DateTime.MinValue || (DateTime.UtcNow - logon).TotalMinutes < 3) return null;   // 刚登录：开机启动项可能还没轮到
-        if (ReadStamp(EnabledPath) > logon) return null;                                           // 这次登录之后才打开的开机自启
-        if (ReadStamp(LastPath) > logon) return null;                                              // 这次登录时自启过了
+        if (logon == DateTime.MinValue || (DateTime.UtcNow - logon).TotalMinutes < 3) return null; // Startup may still be pending.
+        if (ReadStamp(EnabledPath) > logon) return null; // Enabled after this login.
+        if (ReadStamp(LastPath) > logon) return null;    // Launched during this session.
         string sw = SecuritySoftware();
-        Log.Write("这次登录时开机自启没有运行（登录于 " + logon.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + "）" + (sw != "" ? "，正在运行的安全软件：" + sw : ""));
+        Log.Write("Autostart did not run after login at " + logon.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + (sw != "" ? "; security software: " + sw : ""));
         return sw;
     }
 }
 
 static class Json
 {
-    static readonly JavaScriptSerializer S = new JavaScriptSerializer();
+    static readonly JavaScriptSerializer S = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
     public static object Parse(string s) { return S.DeserializeObject(s); }
     public static string Stringify(object o) { return S.Serialize(o); }
     public static Dictionary<string, object> Obj(params object[] kv)
@@ -209,34 +165,42 @@ static class Json
     }
 }
 
-// 用户设置：当前主题 + 每个主题的参数（只存用户改过的，没改过的用主题默认值）
-// 保存在 %LOCALAPPDATA%\Deskland\settings.json
+// Store the selected theme and only the parameters changed from their defaults.
+// Preview uses its own profile directory.
 static class Settings
 {
     static readonly string FilePath = Path.Combine(Log.DataDir, "settings.json");
     public static string Theme = "beach";
-    public static string Lang = "auto";                // 界面语言："auto"（跟随系统）或 I18n.Supported 里的一种
+    public static string Lang = "auto";                // System language or a supported language code.
+    public static Dictionary<string, object> Environment = new Dictionary<string, object>();
+    public static bool MousePassthrough = true;
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
 
     public static void Load()
     {
         try
         {
-            if (!File.Exists(FilePath)) return;
-            var root = Json.Parse(File.ReadAllText(FilePath, Encoding.UTF8)) as Dictionary<string, object>;
+            string source = FilePath;
+            if (!File.Exists(source) && !InstallProfile.Isolated)
+                source = Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "DesklandPreview", "settings.json");
+            if (!File.Exists(source)) return;
+            var root = Json.Parse(File.ReadAllText(source, Encoding.UTF8)) as Dictionary<string, object>;
             if (root == null) return;
             object v;
             if (root.TryGetValue("theme", out v) && v is string) Theme = (string)v;
-            if (root.TryGetValue("lang", out v) && v is string) Lang = (string)v;
+            if (root.TryGetValue("lang", out v) && v is string) Lang = I18n.Normalize((string)v);
+            if (root.TryGetValue("environment", out v) && v is Dictionary<string, object>) Environment = (Dictionary<string, object>)v;
+            if (root.TryGetValue("mousePassthrough", out v) && v is bool) MousePassthrough = (bool)v;
             if (root.TryGetValue("params", out v) && v is Dictionary<string, object>)
                 foreach (var kv in (Dictionary<string, object>)v)
                 {
                     var d = kv.Value as Dictionary<string, object>;
                     if (d != null) Params[kv.Key] = d;
                 }
-            Log.Write("已读取设置：主题 " + Theme);
+            Log.Write("Loaded settings for theme " + Theme);
+            if (source != FilePath) Save();
         }
-        catch (Exception ex) { Log.Write("读取设置失败（将使用默认值）：" + ex.Message); }
+        catch (Exception ex) { Log.Write("Could not load settings; using defaults: " + ex.Message); }
     }
 
     public static void Save()
@@ -244,9 +208,9 @@ static class Settings
         try
         {
             Directory.CreateDirectory(Log.DataDir);
-            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "lang", Lang, "params", Params)), new UTF8Encoding(false));
+            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "lang", Lang, "params", Params, "environment", Environment, "mousePassthrough", MousePassthrough)), new UTF8Encoding(false));
         }
-        catch (Exception ex) { Log.Write("保存设置失败：" + ex.Message); }
+        catch (Exception ex) { Log.Write("Could not save settings: " + ex.Message); }
     }
 
     public static Dictionary<string, object> For(string theme)
@@ -255,34 +219,46 @@ static class Settings
         if (!Params.TryGetValue(theme, out d)) Params[theme] = d = new Dictionary<string, object>();
         return d;
     }
+
+    public static bool IconShadowsEnabled()
+    {
+        Dictionary<string, object> values;
+        object value;
+        return Params.TryGetValue(Theme, out values) && values.TryGetValue("iconShadows", out value) && Equals(value, 1);
+    }
 }
 
-// 界面语言（2026-10-14）：文字表在 prototype/i18n/<语言>.json——ui 给设置页、host 给托盘菜单和提示框、themes 给主题名和参数（简体中文的主题文字就是 themes.json 本身）。
-// 设置里的"语言"默认"跟随系统"：用 Windows 的界面语言；不支持的语言用英文
+// Localized UI and host text lives in prototype/i18n. Unsupported system
+// languages fall back to English.
 static class I18n
 {
-    // 增加语言时同步设置页 LANGS 与体验版导出的语言列表。
-    public static readonly string[] Supported = { "zh-CN", "en" };
-    public static string Code = "zh-CN", Sys = "en";     // 现在用的语言；"跟随系统"时会用的语言
-    static Dictionary<string, object> cur, en, zh;
+    // Keep the settings page language list in sync with this list.
+    public static readonly string[] Supported = { "en", "nl" };
+    public static string Code = "en", Sys = "en";
+    static Dictionary<string, object> cur, en;
 
     public static string FromCulture(System.Globalization.CultureInfo c)
     {
-        string n = c.Name.ToLowerInvariant(), two = c.TwoLetterISOLanguageName;
-        bool zhHant = n.StartsWith("zh") && (n.Contains("hant") || n.EndsWith("-tw") || n.EndsWith("-hk") || n.EndsWith("-mo"));
-        string want = n.StartsWith("zh") ? (zhHant ? "zh-TW" : "zh-CN") : two == "pt" ? "pt-BR" : two;
+        string two = c.TwoLetterISOLanguageName;
+        string want = two;
         if (Array.IndexOf(Supported, want) >= 0) return want;
-        return n.StartsWith("zh") ? "zh-CN" : "en";       // 繁体中文还没做：先用简体
+        return "en";
+    }
+
+    public static string Normalize(string setting)
+    {
+        if (string.IsNullOrEmpty(setting) || setting == "auto") return "auto";
+        return Array.IndexOf(Supported, setting) >= 0 ? setting : "en";
     }
 
     public static void Load(string pageDir, string setting)
     {
         Sys = FromCulture(System.Globalization.CultureInfo.CurrentUICulture);
-        Code = Array.IndexOf(Supported, setting) >= 0 ? setting : Sys;
-        zh = Read(pageDir, "zh-CN");
+        setting = Normalize(setting);
+        Code = setting == "auto" ? Sys : setting;
         en = Read(pageDir, "en");
-        cur = Code == "zh-CN" ? zh : Code == "en" ? en : Read(pageDir, Code);
-        Log.Write("界面语言：" + Code + "（设置：" + setting + "，系统：" + Sys + "）");
+        cur = Code == "en" ? en : Read(pageDir, Code);
+        Log.Write("UI language: " + Code + " (setting: " + setting + ", system: " + Sys + ")");
     }
 
     static Dictionary<string, object> Read(string pageDir, string code)
@@ -293,67 +269,75 @@ static class I18n
             object h;
             return root != null && root.TryGetValue("host", out h) ? h as Dictionary<string, object> : null;
         }
-        catch (Exception ex) { Log.Write("读取语言文件失败（" + code + "）：" + ex.Message); return null; }
+        catch (Exception ex) { Log.Write("Could not load language " + code + ": " + ex.Message); return null; }
     }
 
-    // 取一句话：当前语言 → 英文 → 简体中文；{名字} 换成后面成对给的值
+    // Look up the current language, falling back to English; substitute named values.
     public static string T(string key, params string[] kv)
     {
         object v = null;
-        bool found = (cur != null && cur.TryGetValue(key, out v)) || (en != null && en.TryGetValue(key, out v)) || (zh != null && zh.TryGetValue(key, out v));
+        bool found = (cur != null && cur.TryGetValue(key, out v)) || (en != null && en.TryGetValue(key, out v));
         string str = found ? (v as string ?? key) : key;
         for (int i = 0; i + 1 < kv.Length; i += 2) str = str.Replace("{" + kv[i] + "}", kv[i + 1]);
         return str;
     }
 }
 
-// 整个程序的生命周期：托盘图标常驻；壁纸窗口没了就重新建一个
-// 打开菜单的方式：托盘图标左键 / 右键、快捷键 Ctrl+Alt+H（或 --menu）
-// 打开设置的方式：双击程序（没运行就先启动再打开）、双击托盘图标、菜单 → 设置…（或 --settings）
+// Application lifetime: maintain the tray icon and recreate lost wallpapers.
+// Open the menu via the tray, Ctrl+Alt+H, or --menu; open settings via a
+// second launch, tray double-click, menu entry, or --settings.
 class HostContext : ApplicationContext
 {
-    public const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "DesklandPreview";
+    public const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "DynamicDesktop";
     static readonly MethodInfo ShowTrayMenu =
         typeof(NotifyIcon).GetMethod("ShowContextMenu", BindingFlags.Instance | BindingFlags.NonPublic);
 
     readonly string pageDir;
     readonly NotifyIcon tray;
     readonly MenuItem pauseItem, autoStartItem, settingsItem, reloadItem, exitItem;
+    readonly MenuItem passthroughItem;
     readonly System.Windows.Forms.Timer watch;
     readonly EventWaitHandle exitEvent, menuEvent, settingsEvent;
     readonly HotkeyWindow hotkey = new HotkeyWindow();
+    readonly DesktopMouseHook mouseHook;
     readonly Queue<DateTime> restarts = new Queue<DateTime>();
     WallpaperForm form, dead;
+    readonly List<WallpaperForm> forms = new List<WallpaperForm>();
+    readonly List<WallpaperForm> deadForms = new List<WallpaperForm>();
+    bool rebuilding;
+    string displaySignature = "";
     SettingsForm settingsWin;
     DateTime nextStart = DateTime.MaxValue, saveDue = DateTime.MaxValue;
     bool manualPause, exiting;
-    string autoStartSw;                                 // 开机自启没跑起来（只在手动打开时检查）：正在运行的安全软件名（没认出来是 ""）；没问题是 null
-    string updateVersion, updateUrl, updateStatus = "", updateError = "";
-    double updateProgress = -1;                         // -1 = 当前阶段没有可显示的百分比
+    string autoStartSw;                                 // null: healthy; otherwise the suspected security product.
 
     public HostContext(string pageDir, bool showSettings)
     {
         this.pageDir = pageDir;
-        Log.Write("启动，页面目录：" + pageDir + (showSettings ? "" : "（开机自动启动）"));
-        if (showSettings) autoStartSw = AutoStartCheck.Detect(IsAutoStart());
+        Log.Write("Starting with page directory " + pageDir + (showSettings ? "" : " (autostart)"));
+        if (showSettings && !InstallProfile.NoAutostart) autoStartSw = AutoStartCheck.Detect(IsAutoStart());
         Settings.Load();
         I18n.Load(pageDir, Settings.Lang);
+        mouseHook = new DesktopMouseHook(delegate(int x, int y) {
+            foreach (WallpaperForm f in forms.ToArray()) f.Ripple(x, y);
+        });
         exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ExitEventName);
         menuEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.MenuEventName);
         settingsEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.SettingsEventName);
 
-        // 快捷键 Ctrl+Alt+H：在鼠标位置弹出菜单
-        bool hotkeyOk = hotkey.Register(Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, Keys.H);
+        // Ctrl+Alt+H opens the menu at the pointer.
+        bool hotkeyOk = !InstallProfile.Test && hotkey.Register(Native.MOD_CONTROL | Native.MOD_ALT | Native.MOD_NOREPEAT, Keys.H);
         hotkey.Pressed += delegate { ShowMenu(); };
-        Log.Write(hotkeyOk ? "快捷键 Ctrl+Alt+H 已注册" : "快捷键 Ctrl+Alt+H 注册失败（可能被其他程序占用）");
+        if (!InstallProfile.Test) Log.Write(hotkeyOk ? "Registered Ctrl+Alt+H" : "Could not register Ctrl+Alt+H (possibly already in use)");
 
         pauseItem = new MenuItem(I18n.T("trayPause"), delegate
         {
             manualPause = !manualPause;
             pauseItem.Checked = manualPause;
-            if (form != null) form.SetManualPause(manualPause);
+            foreach (WallpaperForm f in forms) f.SetManualPause(manualPause);
         });
         autoStartItem = new MenuItem(I18n.T("trayAutostart"), delegate { SetAutoStart(!autoStartItem.Checked); });
+        autoStartItem.Enabled = !InstallProfile.NoAutostart;
         autoStartItem.Checked = IsAutoStart();
         if (autoStartItem.Checked && AutoStartValue() != "")
         {
@@ -362,30 +346,38 @@ class HostContext : ApplicationContext
                 if (CreateAutoStartShortcut())
                 {
                     DeleteRunAutoStart();
-                    Log.Write("开机自动启动已迁移到当前用户启动文件夹");
+                    Log.Write("Migrated autostart to the current user's Startup folder");
                 }
                 else if (AutoStartValue().IndexOf("--autostart") < 0)
-                    using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))   // 回退项缺参数时补上
+                    using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))   // Add missing arguments to the fallback entry.
                         k.SetValue(RunName, "\"" + Application.ExecutablePath + "\" --autostart");
             }
-            catch (Exception ex) { Log.Write("迁移开机自动启动失败，保留原启动项：" + ex.Message); }
+            catch (Exception ex) { Log.Write("Autostart migration failed; retaining existing entry: " + ex.Message); }
         }
         settingsItem = new MenuItem(I18n.T("traySettings"), delegate { OpenSettings(); });
-        settingsItem.DefaultItem = true;                // 粗体：主入口
+        settingsItem.DefaultItem = true;                // Mark the primary entry in bold.
+        passthroughItem = new MenuItem(I18n.T("trayMousePassthrough"), delegate {
+            Settings.MousePassthrough = !Settings.MousePassthrough;
+            passthroughItem.Checked = Settings.MousePassthrough;
+            foreach (WallpaperForm f in forms) f.SetPassthrough(Settings.MousePassthrough);
+            SaveSoon();
+        });
+        passthroughItem.Checked = Settings.MousePassthrough;
 
         tray = new NotifyIcon();
         tray.Icon = AppIcon.Create();
-        tray.Text = "Deskland Preview";
+        tray.Text = "DynamicDesktop";
         tray.ContextMenu = new ContextMenu(new[] {
             settingsItem,
             pauseItem,
-            reloadItem = new MenuItem(I18n.T("trayReload"), delegate { if (form != null) form.Reload(); }),
+            passthroughItem,
+            reloadItem = new MenuItem(I18n.T("trayReload"), delegate { foreach (WallpaperForm f in forms) f.Reload(); }),
             autoStartItem,
             new MenuItem("-"),
             exitItem = new MenuItem(I18n.T("trayExit"), delegate { Exit(); }),
         });
         tray.MouseUp += delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowMenu(); };
-        tray.DoubleClick += delegate { OpenSettings(); };   // 双击托盘图标：直接打开设置
+        tray.DoubleClick += delegate { OpenSettings(); };
         tray.Visible = true;
         ShowWelcomeOnce(hotkeyOk);
 
@@ -394,20 +386,21 @@ class HostContext : ApplicationContext
         watch.Tick += delegate { Watch(); };
         watch.Start();
         StartForm();
-        if (showSettings) OpenSettings();                // 用户双击程序启动：直接打开设置
+        if (showSettings) OpenSettings();
     }
 
-    // 换了界面语言：托盘菜单的文字跟着换
+    // Refresh tray text after a language change.
     void ApplyTrayTexts()
     {
         settingsItem.Text = I18n.T("traySettings");
         pauseItem.Text = I18n.T("trayPause");
+        passthroughItem.Text = I18n.T("trayMousePassthrough");
         reloadItem.Text = I18n.T("trayReload");
         autoStartItem.Text = I18n.T("trayAutostart");
         exitItem.Text = I18n.T("trayExit");
     }
 
-    // ---------------------------------------------------------------- 设置窗口
+    // Settings window
     public void OpenSettings()
     {
         if (exiting) return;
@@ -415,13 +408,13 @@ class HostContext : ApplicationContext
         {
             settingsWin = new SettingsForm(pageDir, this);
             settingsWin.FormClosed += delegate { settingsWin = null; };
-            Log.Write("打开设置窗口");
+            Log.Write("Opening settings");
         }
         if (settingsWin.WindowState == FormWindowState.Minimized) settingsWin.WindowState = FormWindowState.Normal;
         settingsWin.Show();
-        // 外部以 SW_HIDE 启动时，WinForms 的 Visible 状态可能已是 true，
-        // 但原生窗口仍被隐藏；Activate / 再次 Show 不会修复，必须显式还原。
-        // SW_RESTORE 同时处理隐藏和最小化，SW_SHOW 不会展开已最小化的窗口。
+        // When started externally with SW_HIDE, WinForms may report Visible even
+        // though the native window is hidden. Activate/Show cannot fix that;
+        // SW_RESTORE handles both hidden and minimized windows.
         Native.ShowWindow(settingsWin.Handle, Native.SW_RESTORE);
         settingsWin.Activate();
     }
@@ -430,40 +423,18 @@ class HostContext : ApplicationContext
     {
         return Json.Stringify(Json.Obj("t", "settings", "v", Settings.For(Settings.Theme)));
     }
-
-    string UpdateStateMessage()
+    string EnvironmentMessage() { return Json.Stringify(Json.Obj("t", "environment", "v", Settings.Environment)); }
+    void Broadcast(string json) { foreach (WallpaperForm f in forms.ToArray()) f.Post(json); }
+    public void SetSettingsDragging(bool dragging)
     {
-        return Json.Stringify(Json.Obj("t", "updateState", "version", updateVersion,
-            "status", updateStatus, "progress", updateProgress, "error", updateError));
-    }
-
-    void PostUpdateState()
-    {
-        if (settingsWin != null) settingsWin.Post(UpdateStateMessage());
-    }
-
-    // 仅用于开发联调或非商店更新源；商店版始终使用 StoreContext，不接受网页传入地址。
-    public void OfferUpdate(string version, string url)
-    {
-        Uri uri;
-        if (string.IsNullOrWhiteSpace(version) || !Uri.TryCreate(url, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps)
-            throw new ArgumentException("更新信息需要版本号和有效的 HTTPS 地址");
-        updateVersion = version.Trim();
-        updateUrl = uri.AbsoluteUri;
-        updateStatus = "available";
-        updateProgress = -1;
-        updateError = "";
-        PostUpdateState();
+        string message = "{\"t\":\"dragging\",\"v\":" + (dragging ? "true" : "false") + "}";
+        Broadcast(message);
+        if (settingsWin != null) settingsWin.Post(message);
     }
 
     void SaveSoon() { saveDue = DateTime.Now.AddMilliseconds(600); }
 
-    bool ThemeAllowed(string id)
-    {
-        return Themes.Allowed(pageDir, id, delegate(string product) { return false; });
-    }
-
-    // 设置页发来的消息：hello / set / reset / theme / autostart / lang / updateProgram
+    // Messages from the settings page.
     public void OnSettingsMessage(string s)
     {
         var m = Json.Parse(s) as Dictionary<string, object>;
@@ -477,8 +448,7 @@ class HostContext : ApplicationContext
                 settingsWin.Post(Json.Stringify(Json.Obj("t", "init", "theme", Settings.Theme, "params", Settings.Params,
                     "screen", Json.Obj("w", scr.Width, "h", scr.Height), "autostart", IsAutoStart(),
                     "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
-                    "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys)));
-                if (updateVersion != null) PostUpdateState();
+                    "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys, "environment", Settings.Environment)));
                 if (form != null && form.LastIcons != "") settingsWin.Post(form.LastIcons);
                 break;
             case "set":
@@ -486,8 +456,11 @@ class HostContext : ApplicationContext
                 string theme = m["theme"] as string, key = m["key"] as string;
                 if (theme == null || key == null) return;
                 Settings.For(theme)[key] = m["value"];
-                if (theme == Settings.Theme && form != null)
-                    form.Post(Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"]))));
+                if (theme == Settings.Theme)
+                {
+                    Broadcast(Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"]))));
+                    if (key == "iconShadows") foreach (WallpaperForm f in forms) f.RefreshIconMasks();
+                }
                 SaveSoon();
                 break;
             }
@@ -496,36 +469,57 @@ class HostContext : ApplicationContext
                 string theme = m["theme"] as string;
                 if (theme == null) return;
                 Settings.Params.Remove(theme);
-                if (theme == Settings.Theme && form != null) form.Post("{\"t\":\"reset\"}");
+                if (theme == Settings.Theme)
+                {
+                    Broadcast("{\"t\":\"reset\"}");
+                    foreach (WallpaperForm f in forms) f.RefreshIconMasks();
+                }
                 SaveSoon();
-                Log.Write("恢复默认设置：" + theme);
+                Log.Write("Restored default settings: " + theme);
                 break;
             }
             case "theme":
             {
                 string id = m["id"] as string;
-                if (id == null || !ThemeAllowed(id))
+                if (Themes.PageFor(pageDir, id) == null)
                 {
                     settingsWin.Post(Json.Stringify(Json.Obj("t", "themeChanged", "id", Settings.Theme)));
-                    Log.Write("拒绝未授权或未知主题切换：" + (id ?? "null"));
+                    Log.Write("Unknown theme: " + (id ?? "null"));
                     return;
                 }
                 string page = Themes.PageFor(pageDir, id);
                 if (page == null || id == Settings.Theme) return;
                 Settings.Theme = id;
                 SaveSoon();
-                if (form != null) form.LoadPage(page);
-                Log.Write("切换主题：" + id);
+                foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(page);
+                Log.Write("Switched theme: " + id);
                 break;
             }
             case "autostartWarnSeen":
                 autoStartSw = null;
                 break;
-            case "lang":                                    // 换界面语言：存下来，托盘菜单跟着换，告诉设置页实际用哪种
+            case "environment":
+            {
+                object value;
+                if (!m.TryGetValue("v", out value) || !(value is Dictionary<string, object>)) break;
+                var input = (Dictionary<string, object>)value;
+                object latitude, longitude, zone, label;
+                input.TryGetValue("latitude", out latitude); input.TryGetValue("longitude", out longitude); input.TryGetValue("timeZone", out zone);
+                input.TryGetValue("label", out label);
+                double lat, lon;
+                bool hasCoordinates = latitude != null && longitude != null && double.TryParse(Convert.ToString(latitude, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lat) && double.TryParse(Convert.ToString(longitude, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+                string name = hasCoordinates ? label as string : null;
+                if (name != null && name.Length > 200) name = name.Substring(0, 200);
+                Settings.Environment = Json.Obj("latitude", hasCoordinates ? latitude : null, "longitude", hasCoordinates ? longitude : null,
+                    "timeZone", zone is string ? zone : "", "label", name);
+                SaveSoon(); Broadcast(EnvironmentMessage());
+                break;
+            }
+            case "lang":                                    // Persist and report the effective language.
             {
                 object v;
                 if (!m.TryGetValue("v", out v) || !(v is string)) return;
-                Settings.Lang = (string)v;
+                Settings.Lang = I18n.Normalize((string)v);
                 SaveSoon();
                 I18n.Load(pageDir, Settings.Lang);
                 ApplyTrayTexts();
@@ -543,14 +537,8 @@ class HostContext : ApplicationContext
             case "openShare":
                 if (lastShare != null && File.Exists(lastShare)) Process.Start(lastShare);
                 break;
-            case "openWebsite":
-                Process.Start("https://deskland.app/");
-                break;
             case "revealShare":
                 if (lastShare != null && File.Exists(lastShare)) Process.Start("explorer.exe", "/select,\"" + lastShare + "\"");
-                break;
-            case "updateProgram":
-                if (updateUrl != null) Process.Start(updateUrl);
                 break;
             case "autostart":
                 SetAutoStart(m["v"] is bool && (bool)m["v"]);
@@ -559,18 +547,18 @@ class HostContext : ApplicationContext
         }
     }
 
-    // ---- 一键分享：壁纸页面画好的图 → 存到"图片\Deskland"，复制到剪贴板，缩略图发回设置页 ----
-    string lastShare;                                   // 最近一张分享图的路径（设置页只能让我们打开这一张）
+    // Save the wallpaper-rendered share image, copy it, and return its thumbnail.
+    string lastShare;                                   // Only the most recent share may be opened from settings.
     void OnShareImage(string thumb, string png, string err)
     {
-        if (err != null || png == null) { PostShareResult(false, null, err ?? I18n.T("errNoImage")); Log.Write("生成分享图失败：" + err); return; }
+        if (err != null || png == null) { PostShareResult(false, null, err ?? I18n.T("errNoImage")); Log.Write("Share image generation failed: " + err); return; }
         try
         {
             int comma = png.IndexOf(',');
             byte[] bytes = Convert.FromBase64String(comma >= 0 ? png.Substring(comma + 1) : png);
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Deskland Preview");
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "DynamicDesktop");
             Directory.CreateDirectory(dir);
-            string path = Path.Combine(dir, "Deskland " + DateTime.Now.ToString("yyyy-MM-dd HHmmss") + ".png");
+            string path = Path.Combine(dir, "DynamicDesktop " + DateTime.Now.ToString("yyyy-MM-dd HHmmss") + ".png");
             File.WriteAllBytes(path, bytes);
             lastShare = path;
             try
@@ -579,19 +567,19 @@ class HostContext : ApplicationContext
                 using (var img = Image.FromStream(ms))
                 {
                     var data = new DataObject();
-                    data.SetImage(new Bitmap(img));                       // 一般的程序（聊天软件等）认这个
-                    data.SetData("PNG", false, new MemoryStream(bytes));  // 认 PNG 的程序（浏览器、Office）用这个，更清楚
+                    data.SetImage(new Bitmap(img));                       // Compatible with ordinary chat applications.
+                    data.SetData("PNG", false, new MemoryStream(bytes));  // Full-quality PNG for browsers and Office.
                     Clipboard.SetDataObject(data, true);
                 }
             }
-            catch (Exception ex) { Log.Write("复制分享图到剪贴板失败：" + ex.Message); }
-            Log.Write("已生成分享图：" + path);
+            catch (Exception ex) { Log.Write("Could not copy share image: " + ex.Message); }
+            Log.Write("Generated share image: " + path);
             if (settingsWin != null)
                 settingsWin.Post(Json.Stringify(Json.Obj("t", "shareResult", "ok", true, "thumb", thumb, "path", path)));
         }
         catch (Exception ex)
         {
-            Log.Write("保存分享图失败：" + ex);
+            Log.Write("Could not save share image: " + ex);
             PostShareResult(false, null, ex.Message);
         }
     }
@@ -599,18 +587,18 @@ class HostContext : ApplicationContext
     {
         if (settingsWin != null) settingsWin.Post(Json.Stringify(Json.Obj("t", "shareResult", "ok", ok, "path", path, "msg", msg)));
     }
-    // 分享动画：存成 MP4（不支持时是 WebM），把文件放到剪贴板（在聊天窗口里直接粘贴就能发出去），
-    // 设置页用 https://share.local/文件名 直接播放
+    // Save a share animation as MP4 or WebM, copy the file to the clipboard,
+    // and let settings play it via the share.local virtual host.
     void OnShareVideo(string mime, string poster, string video, string err)
     {
-        if (err != null || video == null) { PostShareResult(false, null, err ?? I18n.T("errNoVideo")); Log.Write("录分享动画失败：" + err); return; }
+        if (err != null || video == null) { PostShareResult(false, null, err ?? I18n.T("errNoVideo")); Log.Write("Share recording failed: " + err); return; }
         try
         {
             int comma = video.IndexOf(',');
             byte[] bytes = Convert.FromBase64String(comma >= 0 ? video.Substring(comma + 1) : video);
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Deskland Preview");
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "DynamicDesktop");
             Directory.CreateDirectory(dir);
-            string name = "Deskland " + DateTime.Now.ToString("yyyy-MM-dd HHmmss") + (mime == "video/webm" ? ".webm" : ".mp4");
+            string name = "DynamicDesktop " + DateTime.Now.ToString("yyyy-MM-dd HHmmss") + (mime == "video/webm" ? ".webm" : ".mp4");
             string path = Path.Combine(dir, name);
             File.WriteAllBytes(path, bytes);
             lastShare = path;
@@ -620,8 +608,8 @@ class HostContext : ApplicationContext
                 files.Add(path);
                 Clipboard.SetFileDropList(files);
             }
-            catch (Exception ex) { Log.Write("复制分享动画到剪贴板失败：" + ex.Message); }
-            Log.Write("已录好分享动画：" + path + "（" + (bytes.Length / 1024) + " KB）");
+            catch (Exception ex) { Log.Write("Could not copy share recording: " + ex.Message); }
+            Log.Write("Recorded share animation: " + path + " (" + (bytes.Length / 1024) + " KB)");
             if (settingsWin != null)
             {
                 settingsWin.MapShareFolder(dir);
@@ -631,12 +619,12 @@ class HostContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            Log.Write("保存分享动画失败：" + ex);
+            Log.Write("Could not save share recording: " + ex);
             PostShareResult(false, null, ex.Message);
         }
     }
 
-    // 在鼠标位置弹出托盘菜单（NotifyIcon 自带的弹出逻辑会处理前台窗口，菜单点别处能正常收起）
+    // NotifyIcon handles foreground activation and dismisses the menu on outside clicks.
     void ShowMenu()
     {
         if (exiting) return;
@@ -644,7 +632,7 @@ class HostContext : ApplicationContext
         if (ShowTrayMenu != null) ShowTrayMenu.Invoke(tray, null);
     }
 
-    // 第一次运行时弹一条系统通知：告诉用户菜单在哪
+    // Show a one-time notification explaining where to find the menu.
     void ShowWelcomeOnce(bool hotkeyOk)
     {
         try
@@ -656,14 +644,14 @@ class HostContext : ApplicationContext
                 I18n.T("welcomeBody", "hotkey", hotkeyOk ? I18n.T("welcomeHotkey") : ""), ToolTipIcon.Info);
             File.WriteAllText(flag, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         }
-        catch (Exception ex) { Log.Write("首次提示失败：" + ex.Message); }
+        catch (Exception ex) { Log.Write("Could not show first-run notification: " + ex.Message); }
     }
 
-    // 开机自动启动：优先用当前用户“启动”文件夹里的快捷方式；旧 Run 项启动时迁移。
-    // 不使用需要额外权限的任务计划；快捷方式创建失败时仍保留 Run 项作为回退。
+    // Prefer a shortcut in the current user's Startup folder and migrate the old
+    // Run entry. Avoid elevated scheduled tasks; retain Run as a fallback.
     static string AutoStartShortcutPath
     {
-        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Deskland.lnk"); }
+        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "DynamicDesktop.lnk"); }
     }
 
     static object OpenAutoStartShortcut()
@@ -710,11 +698,11 @@ class HostContext : ApplicationContext
             link.GetType().InvokeMember("IconLocation", BindingFlags.SetProperty,
                 null, link, new object[] { Application.ExecutablePath + ",0" });
             link.GetType().InvokeMember("Description", BindingFlags.SetProperty,
-                null, link, new object[] { "Deskland" });
+                null, link, new object[] { "DynamicDesktop" });
             link.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
             return File.Exists(AutoStartShortcutPath);
         }
-        catch (Exception ex) { Log.Write("创建启动文件夹快捷方式失败：" + ex.Message); return false; }
+        catch (Exception ex) { Log.Write("Could not create Startup shortcut: " + ex.Message); return false; }
         finally { if (link != null) Marshal.FinalReleaseComObject(link); }
     }
 
@@ -736,12 +724,14 @@ class HostContext : ApplicationContext
 
     static bool IsAutoStart()
     {
+        if (InstallProfile.NoAutostart) return false;
         return AutoStartShortcutEnabled()
             || AutoStartValue().IndexOf(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     void SetAutoStart(bool on)
     {
+        if (InstallProfile.NoAutostart) return;
         if (InstallProfile.Isolated) return;
         try
         {
@@ -753,68 +743,101 @@ class HostContext : ApplicationContext
                     using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
                         k.SetValue(RunName, "\"" + Application.ExecutablePath + "\" --autostart");
                 AutoStartCheck.MarkEnabled();
-                Log.Write(shortcut ? "已开启开机自动启动（当前用户启动文件夹）" : "已开启开机自动启动（传统启动项回退）");
+                Log.Write(shortcut ? "Enabled autostart using Startup folder" : "Enabled autostart using the Run fallback");
             }
             else
             {
                 DeleteRunAutoStart();
                 if (File.Exists(AutoStartShortcutPath)) File.Delete(AutoStartShortcutPath);
-                Log.Write(IsAutoStart() ? "关闭开机自动启动失败，启动项仍存在" : "已关闭开机自动启动");
+                Log.Write(IsAutoStart() ? "Autostart entry still exists after disabling" : "Disabled autostart");
             }
         }
-        catch (Exception ex) { Log.Write("设置开机自动启动失败：" + ex.Message); }
+        catch (Exception ex) { Log.Write("Could not change autostart: " + ex.Message); }
         autoStartItem.Checked = IsAutoStart();
     }
 
     void StartForm()
     {
         nextStart = DateTime.MaxValue;
-        if (!ThemeAllowed(Settings.Theme)) Settings.Theme = ThemeAllowed("beach") ? "beach" : "meadow";
-        string page = ThemeAllowed(Settings.Theme) ? Themes.PageFor(pageDir, Settings.Theme) : null;
+        string page = Themes.PageFor(pageDir, Settings.Theme);
         if (page == null)
         {
-            Log.Write("没有可加载的已授权主题，5 秒后重试");
+            Settings.Theme = "beach";
+            page = Themes.PageFor(pageDir, Settings.Theme);
+        }
+        if (page == null)
+        {
+            Log.Write("No authorized theme is available; retrying in five seconds");
             nextStart = DateTime.Now.AddSeconds(5);
             return;
         }
-        form = new WallpaperForm(pageDir, page, manualPause);
-        form.SettingsJson = SettingsMessage;
-        form.IconsChanged += delegate(string json) { if (settingsWin != null) settingsWin.Post(json); };
-        form.RecordProgress += delegate(string p) { if (settingsWin != null) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
-        form.HandleDestroyed += OnFormGone;
-        form.Show();
+        displaySignature = DisplaySignature();
+        foreach (Screen monitor in Screen.AllScreens)
+        {
+            var f = new WallpaperForm(pageDir, page, manualPause, monitor.Bounds);
+            forms.Add(f);
+            if (monitor.Primary || form == null) form = f;
+            f.SettingsJson = SettingsMessage;
+            f.EnvironmentJson = EnvironmentMessage;
+            f.IconsChanged += delegate(string json) { if (f == form && settingsWin != null) settingsWin.Post(json); };
+            f.RecordProgress += delegate(string p) { if (f == form && settingsWin != null) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
+            f.HandleDestroyed += OnFormGone;
+            f.Show();
+        }
+    }
+
+    static string DisplaySignature()
+    {
+        var parts = new List<string>();
+        foreach (Screen s in Screen.AllScreens) parts.Add(s.DeviceName + ":" + s.Bounds.ToString() + ":" + s.Primary);
+        parts.Sort(StringComparer.Ordinal);
+        return string.Join("|", parts.ToArray());
+    }
+
+    void RebuildForms()
+    {
+        rebuilding = true;
+        foreach (WallpaperForm f in forms.ToArray()) f.Shutdown();
+        forms.Clear(); form = null;
+        rebuilding = false;
+        nextStart = DateTime.Now.AddMilliseconds(500);
     }
 
     void OnFormGone(object sender, EventArgs e)
     {
         var f = (WallpaperForm)sender;
-        if (f != form) return;
-        form = null;
-        dead = f;                                        // 稍后在计时器里释放，避免在销毁回调里重入
+        if (!forms.Remove(f)) return;
+        deadForms.Add(f);
+        if (f == form) form = forms.Count > 0 ? forms[0] : null;
+        if (rebuilding) return;
         if (exiting) return;
         if (f.Fatal) { Exit(); return; }
 
-        // 1 分钟内反复被销毁：不再重试，避免和资源管理器打架
+        // Stop retrying after repeated destruction to avoid fighting Explorer.
         restarts.Enqueue(DateTime.Now);
         while (restarts.Count > 0 && (DateTime.Now - restarts.Peek()).TotalSeconds > 60) restarts.Dequeue();
         if (restarts.Count > 5)
         {
-            Log.Write("壁纸窗口 1 分钟内被销毁超过 5 次，停止重试");
-            MessageBox.Show(I18n.T("errRebuilt") + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "Deskland Preview");
+            Log.Write("Wallpaper window was destroyed over five times in one minute; stopping retries");
+            MessageBox.Show(I18n.T("errRebuilt") + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "DynamicDesktop");
             Exit();
             return;
         }
-        Log.Write("壁纸窗口被销毁（资源管理器重建了壁纸层），1 秒后重新挂载");
+        Log.Write("Explorer destroyed the wallpaper window; reattaching in one second");
+        RebuildForms();
         nextStart = DateTime.Now.AddSeconds(1);
     }
 
     void Watch()
     {
         if (dead != null) { try { dead.Dispose(); } catch { } dead = null; }
+        foreach (WallpaperForm f in deadForms.ToArray()) { try { f.Dispose(); } catch { } }
+        deadForms.Clear();
         if (exitEvent.WaitOne(0)) { Exit(); return; }
         if (menuEvent.WaitOne(0)) ShowMenu();
         if (settingsEvent.WaitOne(0)) OpenSettings();
         if (DateTime.Now >= saveDue) { saveDue = DateTime.MaxValue; Settings.Save(); }
+        if (forms.Count > 0 && DisplaySignature() != displaySignature) RebuildForms();
         if (form == null && !exiting && DateTime.Now >= nextStart) StartForm();
     }
 
@@ -826,14 +849,15 @@ class HostContext : ApplicationContext
         if (saveDue != DateTime.MaxValue) Settings.Save();
         if (settingsWin != null) { try { settingsWin.Close(); } catch { } }
         hotkey.Dispose();
+        mouseHook.Dispose();
         tray.Visible = false;
-        if (form != null) form.Shutdown();
-        Log.Write("退出");
+        foreach (WallpaperForm f in forms.ToArray()) f.Shutdown();
+        Log.Write("Exiting");
         ExitThread();
     }
 }
 
-// 接收全局快捷键的隐藏窗口（只收消息，不显示）
+// Hidden message-only window receiving the global hotkey.
 class HotkeyWindow : NativeWindow, IDisposable
 {
     public event EventHandler Pressed;
@@ -842,7 +866,7 @@ class HotkeyWindow : NativeWindow, IDisposable
     public HotkeyWindow()
     {
         var cp = new CreateParams();
-        cp.Parent = new IntPtr(-3);                     // HWND_MESSAGE：纯消息窗口
+        cp.Parent = new IntPtr(-3);                     // HWND_MESSAGE
         CreateHandle(cp);
     }
 
@@ -866,12 +890,45 @@ class HotkeyWindow : NativeWindow, IDisposable
     }
 }
 
-// 托盘和设置窗口共用 Deskland 图标；构建脚本会把图标复制到程序目录。
+// Observe clicks without consuming them, so Explorer and other applications keep their normal input.
+class DesktopMouseHook : IDisposable
+{
+    readonly Native.MouseHookProc callback;
+    readonly Action<int, int> clicked;
+    IntPtr hook;
+    public DesktopMouseHook(Action<int, int> clicked)
+    {
+        this.clicked = clicked;
+        callback = OnMouse;
+        hook = Native.SetWindowsHookEx(14, callback, Native.GetModuleHandle(null), 0);
+        if (hook == IntPtr.Zero) Log.Write("Could not install desktop click observer.");
+    }
+    IntPtr OnMouse(int code, IntPtr message, IntPtr data)
+    {
+        if (code >= 0 && message.ToInt32() == 0x0201)
+        {
+            Native.POINT point = (Native.POINT)Marshal.PtrToStructure(data, typeof(Native.POINT));
+            IntPtr target = Native.WindowFromPoint(point);
+            while (target != IntPtr.Zero)
+            {
+                var name = new StringBuilder(128);
+                Native.GetClassName(target, name, name.Capacity);
+                string c = name.ToString();
+                if (c == "SHELLDLL_DefView" || c == "Progman" || c == "WorkerW") { clicked(point.X, point.Y); break; }
+                target = Native.GetParent(target);
+            }
+        }
+        return Native.CallNextHookEx(hook, code, message, data);
+    }
+    public void Dispose() { if (hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; } }
+}
+
+// The tray and settings window share the icon copied by the build script.
 static class AppIcon
 {
     public static Icon Create()
     {
-        return new Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesklandPreview.ico"));
+        return new Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DynamicDesktop.ico"));
     }
 
     static GraphicsPath RoundRect(Rectangle r, int radius)
@@ -887,7 +944,7 @@ static class AppIcon
     }
 }
 
-// 设置窗口：普通的桌面窗口，里面用 WebView2 显示 prototype/settings.html
+// Normal desktop settings window hosting prototype/settings.html in WebView2.
 class SettingsForm : Form
 {
     readonly WebView2 web;
@@ -898,15 +955,15 @@ class SettingsForm : Form
     {
         this.pageDir = pageDir;
         this.host = host;
-        Text = "Deskland Preview";
-        AccessibleName = "Deskland Preview";
+        Text = "DynamicDesktop";
+        AccessibleName = "DynamicDesktop";
         ShowIcon = true;
         Icon = AppIcon.Create();
         StartPosition = FormStartPosition.CenterScreen;
-        float s = Native.GetDpiForSystem() / 96f;       // 进程按物理像素工作，窗口尺寸要自己按缩放比例算
-        ClientSize = new Size((int)(1120 * s), (int)(800 * s));     // 左边主题排三列，右边上面预览、下面参数
+        float s = Native.GetDpiForSystem() / 96f;       // The process uses physical pixels; scale the window dimensions explicitly.
+        ClientSize = new Size((int)(1120 * s), (int)(800 * s));     // Three theme columns on the left; preview above controls on the right.
         MinimumSize = new Size((int)(940 * s), (int)(680 * s));
-        BackColor = Color.White;
+        BackColor = SystemAppsLight() ? Color.White : Color.FromArgb(23, 23, 23);
 
         web = new WebView2();
         web.Dock = DockStyle.Fill;
@@ -916,8 +973,13 @@ class SettingsForm : Form
         Controls.Add(web);
     }
 
-    // 标题栏（系统原生那条）刷成和页面底色一样：settings.html 跟随系统深浅色（浅 #ffffff / 深 #171717），
-    // 标题栏也按系统深浅色取同一个颜色。DWMWA_CAPTION_COLOR / 深色模式要 Win11，旧系统调用失败就保持系统原样
+    // Match the native title bar to the settings.html background (light #ffffff / dark #171717).
+    // Use the system theme for both. Caption color and dark mode require Windows 11; older systems retain their defaults if the calls fail.
+    static bool SystemAppsLight()
+    {
+        try { return Convert.ToInt32(Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1)) != 0; }
+        catch { return true; }
+    }
     void ThemeTitleBar()
     {
         bool light = true;
@@ -928,14 +990,17 @@ class SettingsForm : Form
         }
         catch { }
         int dark = light ? 0 : 1;
-        int color = light ? 0x00FFFFFF : 0x00171717;      // COLORREF 是 0x00BBGGRR
-        Native.DwmSetWindowAttribute(Handle, 20, ref dark, 4);    // DWMWA_USE_IMMERSIVE_DARK_MODE：标题文字、按钮跟着深浅色
+        int color = light ? 0x00FFFFFF : 0x00171717;      // COLORREF uses 0x00BBGGRR.
+        Native.DwmSetWindowAttribute(Handle, 20, ref dark, 4);    // DWMWA_USE_IMMERSIVE_DARK_MODE: match title text and buttons to the system theme.
         Native.DwmSetWindowAttribute(Handle, 35, ref color, 4);   // DWMWA_CAPTION_COLOR
     }
     protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); ThemeTitleBar(); }
+    protected override void OnFormClosed(FormClosedEventArgs e) { host.SetSettingsDragging(false); base.OnFormClosed(e); }
     protected override void WndProc(ref Message m)
     {
-        if (m.Msg == 0x001A /* WM_SETTINGCHANGE */) ThemeTitleBar();   // 系统切深浅色时标题栏跟着换
+        if (m.Msg == 0x0231) host.SetSettingsDragging(true);
+        if (m.Msg == 0x0232) host.SetSettingsDragging(false);
+        if (m.Msg == 0x001A /* WM_SETTINGCHANGE */) ThemeTitleBar();   // Update the title bar when the system theme changes.
         base.WndProc(ref m);
     }
 
@@ -954,28 +1019,28 @@ class SettingsForm : Form
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs a)
             {
                 try { host.OnSettingsMessage(a.TryGetWebMessageAsString()); }
-                catch (Exception ex) { Log.Write("处理设置消息失败：" + ex.Message); }
+                catch (Exception ex) { Log.Write("Failed to process settings message: " + ex.Message); }
             };
             string settingsUrl = "https://app.local/settings.html?v=" + Uri.EscapeDataString(Application.ProductVersion);
-            Log.Write("设置页面：" + settingsUrl);
+            Log.Write("Settings page: " + settingsUrl);
             core.Navigate(settingsUrl);
         }
         catch (Exception ex)
         {
-            Log.Write("设置窗口启动失败：" + ex);
-            MessageBox.Show(I18n.T("errSettings", "msg", ex.Message), "Deskland Preview");
+            Log.Write("Failed to open the settings window: " + ex);
+            MessageBox.Show(I18n.T("errSettings", "msg", ex.Message), "DynamicDesktop");
             Close();
         }
     }
 
     public void Post(string json)
     {
-        // 设置窗口是临时窗口：它的 WebView2 失效就先不发（关掉重开即恢复），别把异常抛回壁纸的轮询
+        // The settings window is temporary. If its WebView2 is invalid, skip the message; reopening it restores the view. Do not propagate the exception to wallpaper polling.
         try { if (!IsDisposed && web.CoreWebView2 != null) web.CoreWebView2.PostWebMessageAsString(json); }
         catch { }
     }
 
-    // 分享的图片 / 动画所在的文件夹：映射成 https://share.local/，设置页可以直接显示、播放
+    // Map the shared image/video folder to https://share.local/ so the settings page can display or play it.
     bool shareMapped;
     public void MapShareFolder(string dir)
     {
@@ -987,6 +1052,7 @@ class SettingsForm : Form
 
 class WallpaperForm : Form
 {
+    static readonly HashSet<IntPtr> WallpaperWindows = new HashSet<IntPtr>();
     readonly WebView2 web;
     readonly System.Windows.Forms.Timer iconTimer, fgTimer;
     readonly string pageDir;
@@ -994,27 +1060,34 @@ class WallpaperForm : Form
     Rectangle screen;
     IntPtr parentHwnd, insertAfter;
     string lastIcons = "";
+    string lastMasks = "";
+    DateTime lastMaskPoll = DateTime.MinValue;
+    bool maskInFlight;
     int lastPause = -1;
     bool manualPause, shuttingDown;
+    bool iconsDirty = true;
+    DateTime lastIconPoll = DateTime.MinValue;
 
     public bool Fatal { get; private set; }
 
-    string page;                                        // 当前主题的页面（themes.json 里的 page）
-    public Func<string> SettingsJson;                   // 页面就绪时先发给它的设置消息
-    public event Action<string> IconsChanged;           // 图标变化时转给设置窗口的预览
+    string page;                                        // Current theme page (the page field in themes.json).
+    public Func<string> SettingsJson;                   // Settings message sent when the page is ready.
+    public Func<string> EnvironmentJson;
+    public event Action<string> IconsChanged;           // Forward icon changes to the settings preview.
     public string LastIcons { get { return lastIcons; } }
     protected override bool ShowWithoutActivation { get { return true; } }
 
-    public WallpaperForm(string pageDir, string page, bool manualPause)
+    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle bounds)
     {
         this.pageDir = pageDir;
         this.page = page;
         this.manualPause = manualPause;
+        this.screen = bounds;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(26, 163, 196);
-        Text = "DesklandWindow";
+        Text = "DynamicDesktopWindow";
 
         web = new WebView2();
         web.Dock = DockStyle.Fill;
@@ -1024,17 +1097,38 @@ class WallpaperForm : Form
         Controls.Add(web);
 
         iconTimer = new System.Windows.Forms.Timer();
-        iconTimer.Interval = 400;
-        iconTimer.Tick += delegate { PollIcons(); };
+        iconTimer.Interval = 150;
+        iconTimer.Tick += delegate { if (iconsDirty || (DateTime.UtcNow - lastIconPoll).TotalSeconds >= 5) PollIcons(); };
         fgTimer = new System.Windows.Forms.Timer();
         fgTimer.Interval = 500;
         fgTimer.Tick += delegate { PollForeground(); };
     }
 
     public void SetManualPause(bool v) { manualPause = v; PollForeground(); }
+    public void RefreshIconMasks() { iconsDirty = true; lastMaskPoll = DateTime.MinValue; }
+    public void Ripple(int x, int y)
+    {
+        if (screen.Contains(x, y)) Post("{\"t\":\"ripple\",\"x\":" + (x - screen.X) + ",\"y\":" + (y - screen.Y) + "}");
+    }
+    public void SetPassthrough(bool v)
+    {
+        if (!IsHandleCreated) return;
+        int style = Native.GetWindowLong(Handle, Native.GWL_EXSTYLE);
+        Native.SetWindowLong(Handle, Native.GWL_EXSTYLE, v ? style | 0x20 : style & ~0x20);
+    }
 
-    // ---- 一键分享：请页面画一张打好马赛克的桌面图（页面不截屏，只用图标的位置） ----
-    Action<string, string, string> snapshotDone;           // (缩略图, 整张 PNG, 出错信息)
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == 0x0084 /* WM_NCHITTEST */ && Settings.MousePassthrough)
+        {
+            message.Result = new IntPtr(-1 /* HTTRANSPARENT */);
+            return;
+        }
+        base.WndProc(ref message);
+    }
+
+    // ---- One-click sharing: ask the page to draw a privacy-masked desktop image using icon positions, without taking a screenshot. ----
+    Action<string, string, string> snapshotDone;           // (thumbnail, full PNG, error message)
     System.Windows.Forms.Timer snapshotTimeout;
     public void RequestSnapshot(Action<string, string, string> done)
     {
@@ -1064,10 +1158,10 @@ class WallpaperForm : Form
         if (done != null) done(thumb, png, err);
     }
 
-    // ---- 分享动画：按当前图标布局录制主题动画，途中发进度，录完发 "record|格式|封面|整段视频" ----
-    Action<string, string, string, string> recordDone;    // (格式, 封面, 整段视频, 出错信息)
+    // ---- Share video: record the theme using the current icon layout, report progress, then send "record|format|poster|full video". ----
+    Action<string, string, string, string> recordDone;    // (format, poster, full video, error message)
     System.Windows.Forms.Timer recordTimeout;
-    public event Action<string> RecordProgress;            // 0..1（字符串）
+    public event Action<string> RecordProgress;            // 0..1 (string)
     public void RequestRecording(Action<string, string, string, string> done)
     {
         if (web.CoreWebView2 == null) { done(null, null, null, I18n.T("errNotReady")); return; }
@@ -1110,17 +1204,17 @@ class WallpaperForm : Form
         catch (COMException ex) { WebDead(ex); }
     }
 
-    // WebView2 运行时后台更新 / 浏览器进程被杀后，CoreWebView2 不为 null 但已 disposed，任何调用都抛异常
-    // （前面的 null 检查挡不住这种状态）。按"壁纸窗口被系统销毁"的既有路径处理：拆掉本窗口，HostContext 1 秒后自动重建
+    // After a background WebView2 runtime update or browser process termination, CoreWebView2 may be non-null but disposed; every call throws.
+    // A null check cannot detect this. Use the existing destroyed-wallpaper-window recovery path: tear down this window and let HostContext rebuild it after one second.
     void WebDead(Exception ex)
     {
         if (shuttingDown) return;
-        Log.Write("WebView2 失效（运行时更新或进程退出），重新挂载壁纸窗口：" + ex.Message);
+        Log.Write("WebView2 became unavailable (runtime update or process exit); remounting the wallpaper window: " + ex.Message);
         Shutdown();
     }
-    string PageUrl { get { return "https://app.local/" + page + "?wallpaper=1"; } }
+    string PageUrl { get { return "https://app.local/" + page + (page.Contains("?") ? "&" : "?") + "wallpaper=1"; } }
 
-    // 切换主题：换页面；新页面就绪后会重新收到设置和图标
+    // Switch themes by navigating to the new page; resend settings and icons when it is ready.
     public void LoadPage(string newPage)
     {
         page = newPage;
@@ -1135,9 +1229,10 @@ class WallpaperForm : Form
         base.OnShown(e);
         try
         {
-            if (!File.Exists(Path.Combine(pageDir, page)))
+            string pageFile = Path.Combine(pageDir, page.Split('?')[0]);
+            if (!File.Exists(pageFile))
             {
-                Fail(I18n.T("errNoPage", "path", Path.Combine(pageDir, page)));
+                Fail(I18n.T("errNoPage", "path", pageFile));
                 return;
             }
             if (!AttachToDesktop())
@@ -1152,8 +1247,8 @@ class WallpaperForm : Form
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreDevToolsEnabled = true;
             core.Settings.IsStatusBarEnabled = false;
-            // 页面就绪（发来 "ready"）：先发设置，再发图标和暂停状态（岸线要按设置里的离岸距离来算）
-            // 一键分享：页面画好分享图后发来 "snapshot|缩略图|整张 PNG"（都是 data URL；整张图很大，不走 JSON）
+            // When the page sends "ready", send settings first, then icons and pause state; shoreline calculations need the configured offshore distance.
+            // For one-click sharing, the page sends "snapshot|thumbnail|full PNG" as data URLs; the full image is too large to send as JSON.
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs a)
             {
                 string msg = null;
@@ -1162,17 +1257,18 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("recprogress|")) { if (RecordProgress != null) RecordProgress(msg.Substring(12)); return; }
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
-                lastIcons = ""; lastPause = -1; PollIcons(); PollForeground();
+                if (EnvironmentJson != null) core.PostWebMessageAsString(EnvironmentJson());
+                lastIcons = ""; lastMasks = ""; lastMaskPoll = DateTime.MinValue; lastPause = -1; PollIcons(); PollForeground();
             };
             core.Navigate(PageUrl);
             iconTimer.Start();
             fgTimer.Start();
-            Log.Write("WebView2 就绪：" + core.Environment.BrowserVersionString);
+            Log.Write("WebView2 ready: " + core.Environment.BrowserVersionString);
         }
         catch (Exception ex)
         {
-            if (shuttingDown || IsDisposed) return;       // 启动途中窗口被系统销毁：交给 HostContext 重试
-            Log.Write("启动失败：" + ex);
+            if (shuttingDown || IsDisposed) return;       // The system destroyed the window during startup; let HostContext retry.
+            Log.Write("Startup failed: " + ex);
             Fail(I18n.T("errStart", "msg", ex.Message));
         }
     }
@@ -1180,23 +1276,23 @@ class WallpaperForm : Form
     void Fail(string msg)
     {
         Log.Write(msg);
-        MessageBox.Show(msg + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "Deskland Preview");
+        MessageBox.Show(msg + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "DynamicDesktop");
         Fatal = true;
         Shutdown();
     }
 
-    // ---------------------------------------------------------------- 挂到壁纸层
-    // 两种桌面结构：
-    //   · Windows 11 24H2 起（"抬高的桌面"）：Progman 下依次是 图标层（SHELLDLL_DefView）→ 系统壁纸层（WorkerW）。
-    //     系统壁纸层会在换壁纸（幻灯片 / 聚焦）时被销毁重建，所以我们不挂进它里面，而是做 Progman 的
-    //     分层子窗口（WS_EX_LAYERED，alpha 255），排在图标层正下方、系统壁纸层之上，并持续守住这个顺序。
-    //     （Progman 没有可供普通子窗口绘制的表面，所以必须是分层窗口；分层子窗口需要 app.manifest 声明支持 Win8+）
-    //   · 旧版：图标层在某个顶层 WorkerW 里，它后面紧跟着负责画壁纸的顶层 WorkerW → 挂进这个 WorkerW
+    // ---------------------------------------------------------------- Attach to the wallpaper layer
+    // Two desktop layouts:
+    //   - Windows 11 24H2 and later ("raised desktop"): Progman contains the icon layer (SHELLDLL_DefView), then the system wallpaper layer (WorkerW).
+    //     The system wallpaper layer is destroyed and recreated when the wallpaper changes (slideshow / Spotlight), so do not attach inside it. Instead create a
+    //     layered child of Progman (WS_EX_LAYERED, alpha 255), directly below the icon layer and above the system wallpaper layer, and maintain that order.
+    //     Progman has no surface for an ordinary child window to draw on, so a layered window is required. Layered children require Windows 8+ support in app.manifest.
+    //   - Older versions: the icon layer is inside a top-level WorkerW, immediately followed by the top-level WorkerW that draws the wallpaper; attach to that WorkerW.
     public static string AttachMode = "progman";
     bool raised;
-    IntPtr zAnchor;                                     // 我们要紧跟在它下面的窗口（图标列表 / 图标层）
+    IntPtr zAnchor;                                     // Window immediately above ours (icon list / icon layer).
     IntPtr winEventHook;
-    Native.WinEventDelegate winEventProc;               // 保持引用，防止被 GC
+    Native.WinEventDelegate winEventProc;               // Keep a reference to prevent garbage collection.
 
     static IntPtr FindClassicWorker()
     {
@@ -1209,7 +1305,7 @@ class WallpaperForm : Form
         return host != IntPtr.Zero ? Native.FindWindowEx(IntPtr.Zero, host, "WorkerW", null) : IntPtr.Zero;
     }
 
-    // 请资源管理器生成壁纸层（只发一次 0xD,1；再发 0xD,0 会把刚生成的壁纸层删掉），最多等 2 秒
+    // Ask Explorer to create the wallpaper layer and wait up to two seconds. Send 0xD,1 only once; sending 0xD,0 afterwards removes the newly created layer.
     static void RequestWorkerW(IntPtr progman, Func<bool> ready)
     {
         IntPtr res;
@@ -1219,9 +1315,9 @@ class WallpaperForm : Form
 
     bool AttachToDesktop()
     {
-        screen = Screen.PrimaryScreen.Bounds;          // 进程是 DPI 感知的 → 物理像素
+        // Screen bounds use physical pixels because the process is per-monitor DPI aware.
         IntPtr progman = Native.FindWindow("Progman", null);
-        if (progman == IntPtr.Zero) { Log.Write("找不到 Progman"); return false; }
+        if (progman == IntPtr.Zero) { Log.Write("Could not find Progman"); return false; }
         IntPtr defView = Native.FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
         string mode;
         raised = defView != IntPtr.Zero;
@@ -1234,19 +1330,19 @@ class WallpaperForm : Form
             if (AttachMode == "legacy")
             {
                 parentHwnd = Native.FindWindowEx(progman, IntPtr.Zero, "WorkerW", null);
-                if (parentHwnd == IntPtr.Zero) { Log.Write("找不到 WorkerW"); return false; }
-                insertAfter = IntPtr.Zero; raised = false; mode = "24H2+ 旧做法：WorkerW 子窗口";
+                if (parentHwnd == IntPtr.Zero) { Log.Write("Could not find WorkerW"); return false; }
+                insertAfter = IntPtr.Zero; raised = false; mode = "24H2+ legacy: WorkerW child window";
             }
             else if (AttachMode == "defview" && listView != IntPtr.Zero)
             {
-                // 实验：挂进图标层里、图标列表之下（换壁纸时不会被重排，但实测在 24H2 上画不出来）
+                // Experimental: attach inside the icon layer below the icon list. Wallpaper changes do not reorder it, but drawing did not work on 24H2 in testing.
                 parentHwnd = defView; insertAfter = listView; zAnchor = listView;
-                mode = "24H2+：图标层（DefView）的分层子窗口，位于图标列表之下";
+                mode = "24H2+: layered child of the icon layer (DefView), below the icon list";
             }
             else
             {
                 parentHwnd = progman; insertAfter = defView; zAnchor = defView;
-                mode = "24H2+：Progman 的分层子窗口，位于图标层之下";
+                mode = "24H2+: layered child of Progman, below the icon layer";
             }
             if (raised)
             {
@@ -1263,66 +1359,78 @@ class WallpaperForm : Form
                 RequestWorkerW(progman, delegate { return FindClassicWorker() != IntPtr.Zero; });
                 worker = FindClassicWorker();
             }
-            if (worker == IntPtr.Zero) { Log.Write("找不到 WorkerW / SHELLDLL_DefView"); return false; }
-            parentHwnd = worker; insertAfter = IntPtr.Zero; mode = "经典：顶层 WorkerW 子窗口";
+            if (worker == IntPtr.Zero) { Log.Write("Could not find WorkerW / SHELLDLL_DefView"); return false; }
+            parentHwnd = worker; insertAfter = IntPtr.Zero; mode = "Classic: child of top-level WorkerW";
         }
 
         int style = Native.GetWindowLong(Handle, Native.GWL_STYLE);
         style = (style & ~(Native.WS_POPUP | Native.WS_CAPTION | Native.WS_THICKFRAME)) | Native.WS_CHILD | Native.WS_VISIBLE;
         Native.SetWindowLong(Handle, Native.GWL_STYLE, style);
+        SetPassthrough(Settings.MousePassthrough);
         Native.SetParent(Handle, parentHwnd);
 
         var pt = new Native.POINT { X = screen.X, Y = screen.Y };
         Native.ScreenToClient(parentHwnd, ref pt);
         Native.SetWindowPos(Handle, insertAfter, pt.X, pt.Y, screen.Width, screen.Height,
             Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | Native.SWP_FRAMECHANGED);
+        WallpaperWindows.Add(Handle);
         EnsureZOrder();
 
-        if (raised)
+        // Explorer reports icon moves, visibility changes and rearrangements through WinEvents.
+        // Polling remains as a fallback for shell implementations that omit an event.
         {
-            // 资源管理器新建 / 重排壁纸层时立刻修正顺序（换壁纸时它会把新的 WorkerW 插到我们上面）
+            // Correct the order immediately when Explorer creates or rearranges wallpaper layers; changing wallpaper inserts a new WorkerW above us.
             uint pid;
             Native.GetWindowThreadProcessId(progman, out pid);
             winEventProc = delegate(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
             {
-                if (idObject == 0 && !shuttingDown && IsHandleCreated) EnsureZOrder();
+                if (shuttingDown || !IsHandleCreated) return;
+                if (idObject == 0 && ev <= 0x8004) EnsureZOrder();
+                iconsDirty = true;
             };
-            winEventHook = Native.SetWinEventHook(0x8000 /* OBJECT_CREATE */, 0x8004 /* OBJECT_REORDER */, IntPtr.Zero,
+            winEventHook = Native.SetWinEventHook(0x8000 /* OBJECT_CREATE */, 0x800B /* OBJECT_LOCATIONCHANGE */, IntPtr.Zero,
                 winEventProc, pid, 0, 0 /* WINEVENT_OUTOFCONTEXT */);
         }
-        Log.Write(string.Format("已挂载（{0}），屏幕 {1}", mode, screen));
+        Log.Write(string.Format("Attached ({0}), screen {1}", mode, screen));
         return true;
     }
 
-    // 守住顺序：紧跟在 zAnchor（图标列表 / 图标层）下面；Progman 挂法还要把系统壁纸层推到最底（被打乱才修）
+    // Keep this window immediately below zAnchor (icon list / icon layer). For Progman, also move the system wallpaper layer to the bottom when the order changes.
     int zFixes;
     void EnsureZOrder()
     {
         if (!raised || zAnchor == IntPtr.Zero || !Native.IsWindow(zAnchor)) return;
         bool fixedAny = false;
-        if (Native.GetWindow(zAnchor, 2 /* GW_HWNDNEXT */) != Handle)
+        IntPtr next = Native.GetWindow(zAnchor, 2 /* GW_HWNDNEXT */);
+        while (next != IntPtr.Zero && next != Handle && WallpaperWindows.Contains(next)) next = Native.GetWindow(next, 2);
+        if (next != Handle)
         {
             Native.SetWindowPos(Handle, zAnchor, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
             fixedAny = true;
         }
         if (AttachMode == "progman")
         {
+            var workers = new List<IntPtr>();
             for (IntPtr w = Native.FindWindowEx(parentHwnd, IntPtr.Zero, "WorkerW", null); w != IntPtr.Zero;
-                 w = Native.FindWindowEx(parentHwnd, w, "WorkerW", null))
+                 w = Native.FindWindowEx(parentHwnd, w, "WorkerW", null)) workers.Add(w);
+            foreach (IntPtr worker in workers)
             {
-                if (Native.GetWindow(w, 2) != IntPtr.Zero)   // 不在最底下 → 推到最底下
+                IntPtr sibling = Native.GetWindow(worker, 2);
+                while (sibling != IntPtr.Zero && workers.Contains(sibling)) sibling = Native.GetWindow(sibling, 2);
+                if (sibling != IntPtr.Zero)
                 {
-                    Native.SetWindowPos(w, new IntPtr(1) /* HWND_BOTTOM */, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+                    Native.SetWindowPos(worker, new IntPtr(1) /* HWND_BOTTOM */, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                     fixedAny = true;
                 }
             }
         }
-        if (fixedAny && ++zFixes <= 20) Log.Write("修正了桌面层级（资源管理器重排了窗口）");
+        if (fixedAny && ++zFixes <= 20) Log.Write("Corrected desktop Z-order after Explorer rearranged windows");
     }
 
-    // ---------------------------------------------------------------- 读取桌面图标
+    // ---------------------------------------------------------------- Read desktop icons
     void PollIcons()
     {
+        iconsDirty = false; lastIconPoll = DateTime.UtcNow;
         EnsureZOrder();
         if (web.CoreWebView2 == null) return;
         bool visible;
@@ -1330,53 +1438,100 @@ class WallpaperForm : Form
         if (rects == null) return;
         var sb = new StringBuilder();
         sb.Append("{\"t\":\"icons\",\"vis\":").Append(visible ? "true" : "false").Append(",\"r\":[");
+        bool first = true;
         for (int i = 0; i < rects.Count; i++)
         {
             Native.RECT r = rects[i];
-            if (i > 0) sb.Append(',');
+            if (r.Right <= screen.Left || r.Left >= screen.Right || r.Bottom <= screen.Top || r.Top >= screen.Bottom) continue;
+            if (!first) sb.Append(',');
+            first = false;
             sb.Append('[').Append(r.Left - screen.X).Append(',').Append(r.Top - screen.Y).Append(',')
               .Append(r.Right - screen.X).Append(',').Append(r.Bottom - screen.Y).Append(']');
         }
         sb.Append("]}");
         string json = sb.ToString();
-        if (json == lastIcons) return;
-        lastIcons = json;
-        if (IconsChanged != null) IconsChanged(json);
-        Post(json);
-        Log.Write(string.Format("图标变化：{0} 个，可见={1}", rects.Count, visible));
+        bool changed = json != lastIcons;
+        if (changed)
+        {
+            lastIcons = json;
+            if (IconsChanged != null) IconsChanged(json);
+            Post(json);
+            Log.Write(string.Format("Desktop icons changed: {0}, visible={1}", rects.Count, visible));
+        }
+        if (!Settings.IconShadowsEnabled())
+        {
+            if (lastMasks.Length != 0)
+            {
+                lastMasks = "";
+                Post("{\"t\":\"iconMasks\",\"v\":[]}");
+            }
+        }
+        else if (changed || (DateTime.UtcNow - lastMaskPoll).TotalSeconds >= 5)
+        {
+            lastMaskPoll = DateTime.UtcNow;
+            QueueMasks(json, visible);
+        }
     }
 
-    // ---------------------------------------------------------------- 最大化 / 全屏时暂停
+    // Shell icon extraction may involve slow files or network locations. Keep it
+    // off the UI thread and use a separate remote buffer from the icon poller.
+    void QueueMasks(string expectedIcons, bool visible)
+    {
+        if (!visible)
+        {
+            string empty = "{\"t\":\"iconMasks\",\"v\":[]}";
+            if (empty != lastMasks) { lastMasks = empty; Post(empty); }
+            return;
+        }
+        if (maskInFlight || shuttingDown) return;
+        maskInFlight = true;
+        Rectangle bounds = screen;
+        var worker = new Thread(delegate()
+        {
+            string masks = null;
+            try
+            {
+                using (var backgroundReader = new IconReader())
+                {
+                    bool currentVisible;
+                    if (backgroundReader.Read(out currentVisible) != null)
+                    {
+                        var serializer = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024 };
+                        masks = serializer.Serialize(Json.Obj("t", "iconMasks", "v", backgroundReader.ReadMasks(bounds, currentVisible)));
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Write("Could not extract desktop icon masks: " + ex.Message); }
+            try
+            {
+                if (!IsDisposed && IsHandleCreated) BeginInvoke((MethodInvoker)delegate
+                {
+                    maskInFlight = false;
+                    if (shuttingDown || !Settings.IconShadowsEnabled()) return;
+                    if (lastIcons != expectedIcons) { iconsDirty = true; lastMaskPoll = DateTime.MinValue; return; }
+                    if (masks != null && masks != lastMasks) { lastMasks = masks; Post(masks); }
+                });
+            }
+            catch (InvalidOperationException) { }
+        });
+        worker.IsBackground = true;
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.Start();
+    }
+
+    // ---------------------------------------------------------------- Pause for maximized / fullscreen windows
     void PollForeground()
     {
         if (web.CoreWebView2 == null) return;
-        bool pause = manualPause;
-        string pauseBy = "";
-        IntPtr fg = Native.GetForegroundWindow();
-        int cloaked = 0;
-        if (!pause && fg != IntPtr.Zero && fg != Handle && Native.IsWindowVisible(fg)
-            && (Native.DwmGetWindowAttribute(fg, 14 /* DWMWA_CLOAKED */, out cloaked, 4) != 0 || cloaked == 0))
-        {
-            var cls = new StringBuilder(64);
-            Native.GetClassName(fg, cls, 64);
-            string c = cls.ToString();
-            if (c != "Progman" && c != "WorkerW" && c != "Shell_TrayWnd" && c != "Shell_SecondaryTrayWnd")
-            {
-                Native.RECT wr;
-                Native.GetWindowRect(fg, out wr);
-                bool covers = wr.Left <= screen.Left && wr.Top <= screen.Top && wr.Right >= screen.Right && wr.Bottom >= screen.Bottom;
-                int cx = (wr.Left + wr.Right) / 2, cy = (wr.Top + wr.Bottom) / 2;
-                if (screen.Contains(cx, cy) && (covers || Native.IsZoomed(fg))) { pause = true; pauseBy = c; }
-            }
-        }
+        bool pause = manualPause || DesktopCoverage.Covers(screen);
         int p = pause ? 1 : 0;
         if (p == lastPause) return;
         lastPause = p;
         Post("{\"t\":\"pause\",\"v\":" + (pause ? "true" : "false") + "}");
-        Log.Write(pause ? "暂停（有窗口最大化 / 全屏，或手动暂停）" + (pauseBy == "" ? "" : "，前台窗口类 " + pauseBy) : "继续播放");
+        Log.Write(string.Format("{0} on {1}", pause ? "Paused" : "Resumed", screen));
     }
 
-    // ---------------------------------------------------------------- 退出：拆掉窗口，让资源管理器重画原壁纸
+    // ---------------------------------------------------------------- Exit: remove the window and let Explorer redraw the original wallpaper
     public void Shutdown()
     {
         if (shuttingDown) return;
@@ -1386,7 +1541,7 @@ class WallpaperForm : Form
         IntPtr parent = parentHwnd;
         try { web.Dispose(); } catch { }
         if (IsHandleCreated) { Native.SetParent(Handle, IntPtr.Zero); Hide(); }
-        // 不改动壁纸设置（幻灯片 / 聚焦壁纸也不受影响），只让资源管理器重画
+        // Do not change wallpaper settings, including slideshow / Spotlight; only ask Explorer to redraw.
         if (parent != IntPtr.Zero && Native.IsWindow(parent))
             Native.RedrawWindow(parent, IntPtr.Zero, IntPtr.Zero, 0x1 | 0x4 | 0x80 | 0x100);
         Close();
@@ -1394,6 +1549,7 @@ class WallpaperForm : Form
 
     protected override void OnHandleDestroyed(EventArgs e)
     {
+        WallpaperWindows.Remove(Handle);
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
         iconTimer.Stop(); fgTimer.Stop();
         reader.Dispose();
@@ -1401,10 +1557,54 @@ class WallpaperForm : Form
     }
 }
 
-// 通过桌面 ListView 的跨进程消息读取图标矩形（图标 + 文字，物理像素，屏幕坐标）
+// Share one snapshot of top-level windows across the wallpaper timers.
+static class DesktopCoverage
+{
+    static readonly uint OwnProcess = (uint)Process.GetCurrentProcess().Id;
+    static readonly List<Rectangle> FullscreenCandidates = new List<Rectangle>();
+    static readonly List<Point> MaximizedCenters = new List<Point>();
+    static DateTime lastScan = DateTime.MinValue;
+
+    public static bool Covers(Rectangle monitor)
+    {
+        DateTime now = DateTime.UtcNow;
+        if ((now - lastScan).TotalMilliseconds >= 250)
+        {
+            lastScan = now;
+            FullscreenCandidates.Clear();
+            MaximizedCenters.Clear();
+            var name = new StringBuilder(64);
+            Native.EnumWindows(delegate(IntPtr window, IntPtr unused) {
+                if (!Native.IsWindowVisible(window) || Native.IsIconic(window)) return true;
+                uint process;
+                Native.GetWindowThreadProcessId(window, out process);
+                if (process == OwnProcess) return true;
+                int cloaked;
+                if (Native.DwmGetWindowAttribute(window, 14 /* DWMWA_CLOAKED */, out cloaked, 4) == 0 && cloaked != 0) return true;
+                Native.GetClassName(window, name, name.Capacity);
+                string className = name.ToString();
+                if (className == "Progman" || className == "WorkerW" || className == "Shell_TrayWnd" || className == "Shell_SecondaryTrayWnd")
+                    return true;
+                Native.RECT rect;
+                if (!Native.GetWindowRect(window, out rect) || rect.Right <= rect.Left || rect.Bottom <= rect.Top) return true;
+                Rectangle bounds = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
+                FullscreenCandidates.Add(bounds);
+                if (Native.IsZoomed(window)) MaximizedCenters.Add(new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2));
+                return true;
+            }, IntPtr.Zero);
+        }
+        foreach (Rectangle window in FullscreenCandidates) if (window.Contains(monitor)) return true;
+        foreach (Point center in MaximizedCenters) if (monitor.Contains(center)) return true;
+        return false;
+    }
+}
+
+// Read icon rectangles (icon and text, physical pixels, screen coordinates) through cross-process desktop ListView messages.
 class IconReader : IDisposable
 {
     IntPtr listView, proc, mem;
+    static readonly Dictionary<string, string> maskCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    static DateTime cacheExpiry = DateTime.MinValue;
 
     static IntPtr FindListView()
     {
@@ -1432,7 +1632,7 @@ class IconReader : IDisposable
         Native.GetWindowThreadProcessId(listView, out pid);
         proc = Native.OpenProcess(0x0008 | 0x0010 | 0x0020, false, pid);   // VM_OPERATION | VM_READ | VM_WRITE
         if (proc == IntPtr.Zero) return false;
-        mem = Native.VirtualAllocEx(proc, IntPtr.Zero, new IntPtr(64), 0x1000 | 0x2000, 0x04);
+        mem = Native.VirtualAllocEx(proc, IntPtr.Zero, new IntPtr(2048), 0x1000 | 0x2000, 0x04);
         return mem != IntPtr.Zero;
     }
 
@@ -1442,13 +1642,13 @@ class IconReader : IDisposable
         if (listView == IntPtr.Zero || mem == IntPtr.Zero || !Native.IsWindow(listView)) { if (!Open()) return null; }
         visible = Native.IsWindowVisible(listView);
         var result = new List<Native.RECT>();
-        if (!visible) return result;                   // 用户隐藏了桌面图标 → 全是海
+        if (!visible) return result;                   // Desktop icons are hidden; the scene is all sea.
         int count = (int)Native.SendMessage(listView, 0x1004 /* LVM_GETITEMCOUNT */, IntPtr.Zero, IntPtr.Zero);
         var origin = new Native.POINT();
         Native.ClientToScreen(listView, ref origin);
         for (int i = 0; i < count; i++)
         {
-            var r = new Native.RECT();                 // Left = LVIR_BOUNDS（0）：图标 + 文字的整体范围
+            var r = new Native.RECT();                 // Left = LVIR_BOUNDS (0): bounds of the icon and text together.
             IntPtr n;
             if (!Native.WriteProcessMemory(proc, mem, ref r, 16, out n)) { Close(); return null; }
             Native.SendMessage(listView, 0x100E /* LVM_GETITEMRECT */, new IntPtr(i), mem);
@@ -1457,6 +1657,93 @@ class IconReader : IDisposable
             result.Add(r);
         }
         return result;
+    }
+
+    // Explorer's item names and shell paths stay in this process; only icon pixels go to the wallpaper.
+    public List<object> ReadMasks(Rectangle screen, bool visible)
+    {
+        var result = new List<object>();
+        if (!visible || proc == IntPtr.Zero || mem == IntPtr.Zero) return result;
+        lock (maskCache)
+            if (DateTime.UtcNow >= cacheExpiry) { maskCache.Clear(); cacheExpiry = DateTime.UtcNow.AddSeconds(60); }
+        var paths = DesktopPaths();
+        int count = (int)Native.SendMessage(listView, 0x1004, IntPtr.Zero, IntPtr.Zero);
+        var origin = new Native.POINT(); Native.ClientToScreen(listView, ref origin);
+        for (int i = 0; i < count; i++)
+        {
+            var iconRect = new Native.RECT { Left = 1 }; IntPtr n;
+            if (!Native.WriteProcessMemory(proc, mem, ref iconRect, 16, out n)) break;
+            if (Native.SendMessage(listView, 0x100E, new IntPtr(i), mem) == IntPtr.Zero) continue;
+            if (!Native.ReadProcessMemory(proc, mem, out iconRect, 16, out n)) break;
+            iconRect.Left += origin.X; iconRect.Right += origin.X; iconRect.Top += origin.Y; iconRect.Bottom += origin.Y;
+            int w = iconRect.Right - iconRect.Left, h = iconRect.Bottom - iconRect.Top;
+            if (w <= 0 || h <= 0 || w > 512 || h > 512 || iconRect.Right <= screen.Left || iconRect.Left >= screen.Right || iconRect.Bottom <= screen.Top || iconRect.Top >= screen.Bottom) continue;
+            byte[] item = new byte[88];
+            byte[] pointer = BitConverter.GetBytes(mem.ToInt64() + 256);
+            Array.Copy(pointer, 0, item, 24, 8);
+            Array.Copy(BitConverter.GetBytes(512), 0, item, 32, 4);
+            if (!Native.WriteProcessBytes(proc, mem, item, item.Length, out n)) break;
+            Native.SendMessage(listView, 0x1073, new IntPtr(i), mem);
+            byte[] text = new byte[1024];
+            if (!Native.ReadProcessBytes(proc, new IntPtr(mem.ToInt64() + 256), text, text.Length, out n)) break;
+            string name = Encoding.Unicode.GetString(text).TrimEnd('\0');
+            int zero = name.IndexOf('\0'); if (zero >= 0) name = name.Substring(0, zero);
+            string path, png;
+            if (!paths.TryGetValue(name, out path)) continue;
+            string key = path + "|" + w + "x" + h;
+            lock (maskCache) maskCache.TryGetValue(key, out png);
+            if (png == null)
+            {
+                png = ReadIconPng(path, w, h);
+                if (png != null) lock (maskCache) maskCache[key] = png;
+            }
+            if (png != null) result.Add(Json.Obj("x", iconRect.Left - screen.X, "y", iconRect.Top - screen.Y, "w", w, "h", h, "src", png));
+        }
+        return result;
+    }
+
+    static Dictionary<string, string> DesktopPaths()
+    {
+        var paths = new Dictionary<string, string>(StringComparer.CurrentCultureIgnoreCase);
+        try
+        {
+            Type type = Type.GetTypeFromProgID("Shell.Application");
+            object shell = Activator.CreateInstance(type);
+            object folder = type.InvokeMember("NameSpace", BindingFlags.InvokeMethod, null, shell, new object[] { 0 });
+            object items = folder.GetType().InvokeMember("Items", BindingFlags.InvokeMethod, null, folder, null);
+            foreach (object item in (System.Collections.IEnumerable)items)
+            {
+                string name = item.GetType().InvokeMember("Name", BindingFlags.GetProperty, null, item, null) as string;
+                string path = item.GetType().InvokeMember("Path", BindingFlags.GetProperty, null, item, null) as string;
+                if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(path) && !paths.ContainsKey(name)) paths.Add(name, path);
+            }
+        }
+        catch (Exception ex) { Log.Write("Could not enumerate desktop icon sources: " + ex.Message); }
+        return paths;
+    }
+
+    static string ReadIconPng(string path, int w, int h)
+    {
+        Native.SHFILEINFO info = new Native.SHFILEINFO();
+        IntPtr pidl; uint attributes;
+        if (Native.SHParseDisplayName(path, IntPtr.Zero, out pidl, 0, out attributes) != 0 || pidl == IntPtr.Zero) return null;
+        try { Native.SHGetFileInfoPidl(pidl, 0, ref info, (uint)Marshal.SizeOf(info), 0x100 | 0x20 | 0x8); }
+        finally { Marshal.FreeCoTaskMem(pidl); }
+        if (info.hIcon == IntPtr.Zero) return null;
+        try
+        {
+            using (Icon icon = Icon.FromHandle(info.hIcon))
+            using (var bitmap = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            using (Graphics g = Graphics.FromImage(bitmap))
+            using (var stream = new MemoryStream())
+            {
+                g.Clear(Color.Transparent); g.DrawIcon(icon, new Rectangle(0, 0, w, h));
+                bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                return "data:image/png;base64," + Convert.ToBase64String(stream.ToArray());
+            }
+        }
+        catch { return null; }
+        finally { Native.DestroyIcon(info.hIcon); }
     }
 
     void Close()
@@ -1483,6 +1770,13 @@ static class Native
     [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode)] public static extern bool WTSQuerySessionInformation(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
     [DllImport("wtsapi32.dll")] public static extern void WTSFreeMemory(IntPtr p);
     public delegate void WinEventDelegate(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+    public delegate IntPtr MouseHookProc(int code, IntPtr message, IntPtr data);
+    [DllImport("user32.dll")] public static extern IntPtr SetWindowsHookEx(int id, MouseHookProc callback, IntPtr module, uint thread);
+    [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
+    [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hwnd);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr GetModuleHandle(string name);
     [DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate proc, uint pid, uint tid, uint flags);
@@ -1493,6 +1787,15 @@ static class Native
 
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct SHFILEINFO
+    {
+        public IntPtr hIcon; public int iIcon; public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szDisplayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string szTypeName;
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SHParseDisplayName(string name, IntPtr binding, out IntPtr pidl, uint attrsIn, out uint attrsOut);
+    [DllImport("shell32.dll", EntryPoint = "SHGetFileInfoW")] public static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint attrs, ref SHFILEINFO info, uint size, uint flags);
+    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
@@ -1515,6 +1818,7 @@ static class Native
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr rect, IntPtr rgn, uint flags);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attribute, out int value, int size);
@@ -1524,15 +1828,29 @@ static class Native
     [DllImport("kernel32.dll")] public static extern bool VirtualFreeEx(IntPtr proc, IntPtr addr, IntPtr size, uint type);
     [DllImport("kernel32.dll")] public static extern bool WriteProcessMemory(IntPtr proc, IntPtr addr, ref RECT buf, int size, out IntPtr written);
     [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr proc, IntPtr addr, out RECT buf, int size, out IntPtr read);
+    [DllImport("kernel32.dll", EntryPoint = "WriteProcessMemory")] public static extern bool WriteProcessBytes(IntPtr proc, IntPtr addr, byte[] buf, int size, out IntPtr written);
+    [DllImport("kernel32.dll", EntryPoint = "ReadProcessMemory")] public static extern bool ReadProcessBytes(IntPtr proc, IntPtr addr, byte[] buf, int size, out IntPtr read);
 }
 
-// Deskland Preview has its own data and instance identity; isolated profiles support installation QA.
+// DynamicDesktop has its own data and instance identity; isolated profiles support installation QA.
 static class InstallProfile
 {
-    public static readonly string Override = Environment.GetEnvironmentVariable("DESKLAND_PROFILE_DIR");
+    static readonly string[] Arguments = Environment.GetCommandLineArgs();
+    public static readonly bool Portable = Array.IndexOf(Arguments, "--portable") >= 0;
+    public static readonly bool Test = Array.IndexOf(Arguments, "--test") >= 0;
+    public static bool NoAutostart { get { return Isolated; } }
+    public static readonly string Override = SelectProfile();
+    static string SelectProfile()
+    {
+        string explicitProfile = Environment.GetEnvironmentVariable("DYNAMICDESKTOP_PROFILE_DIR");
+        if (!string.IsNullOrEmpty(explicitProfile)) return explicitProfile;
+        if (Test) return Path.Combine(Path.GetTempPath(), "DynamicDesktop-test");
+        if (Portable) return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+        return null;
+    }
     public static readonly bool Isolated = !string.IsNullOrEmpty(Override);
     public static readonly string DataDir = Isolated ? Path.GetFullPath(Override) : Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesklandPreview");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DynamicDesktop");
     public static readonly string Suffix = MakeSuffix();
     static string MakeSuffix()
     {
@@ -1544,7 +1862,7 @@ static class InstallProfile
     // An installer may only close the instance using this exact executable path.
     public static int StopInstalled()
     {
-        foreach (Process process in Process.GetProcessesByName("Deskland"))
+        foreach (Process process in Process.GetProcessesByName("DynamicDesktop"))
         {
             using (process)
             {

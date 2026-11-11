@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DynamicDesktop · Forest (Community)</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #315941; }
+  #art, #ghosts { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #ghosts { pointer-events: none; }
+  .ghost { position: absolute; display: grid; place-content: start center; justify-items: center; gap: 6px; padding-top: 6px; }
+  .ghost i { width: 42px; height: 42px; background: #fff9; border: 1px solid #fffb; border-radius: 9px; }
+  .ghost b { width: 48px; height: 5px; background: #fffc; border-radius: 3px; }
+</style>
+</head>
+<body>
+<canvas id="art" aria-label="Forest with clearings around desktop icons"></canvas>
+<div id="ghosts"></div>
+<script src="environment.js"></script>
+<script src="woodland.js"></script>
+<script src="community-effects.js"></script>
+<script src="share.js"></script>
+</body>
+</html>

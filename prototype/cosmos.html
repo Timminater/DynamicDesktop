@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DynamicDesktop · Cosmos</title>
+<!--
+  cosmos theme (Canvas 2D)
+  Art direction: deep space. Every group of icons is a star system: the icons are its suns, sitting in a dark pocket with a glowing rim of gas
+  - Orbits: contour lines of the icon field at growing distances, so they follow the shape of each group and merge between neighbouring groups
+    like equipotential lines. Planets travel along them, always lit from the side that faces their suns (the direction in which the field falls)
+  - Nebula: noise colored by the palette, brighter around the groups; computed at low resolution (it is soft anyway) and enlarged smoothly
+  - Background, nebula, stars and orbit lines are static and cached at the screen's actual pixels (old and new scene cross-fade when the icons move)
+  - Every frame only draws small things: a slowly turning spiral galaxy (one sprite), twinkling stars, planets with trails, moons and rings,
+    shooting stars, now and then a comet and a nova
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #04030f; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  /* Preview mode (?preview=1, inside the settings window) and standalone mode: translucent blocks mark where the icons are */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.ghosts #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.4); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="ghosts"></div>
+<!-- Community theme (GPL-3.0). See NOTICE for attribution. -->
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;   // desktop grid (also used by share.js)
+const STEP = 6;                                  // field grid (CSS px)
+const MARGIN = 150;                              // the field extends this far beyond the screen, so orbits leave the screen and come back instead of running along its edge
+const NEB = 4;                                   // the nebula is computed once every 4 CSS px
+const MORPH_MS = 1600;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');                // wallpaper mode: loaded by the desktop host; messages come from the host
+const PREVIEW = QS.has('preview');               // preview mode: the preview (iframe) in the settings window; messages come from the parent page
+// Defaults must match the "default" values of the cosmos theme in themes.json
+const P = { sigma: 80, palette: 0, stars: 0.6, orbits: 3, planets: 8, speed: 1, galaxy: 1, meteors: 0.5, adaptive: 1, cap30: true };
+const DEFAULTS = Object.assign({}, P);
+// Accepted parameters: [min, max, integer]
+const RANGES = { sigma: [40, 200], palette: [0, 3, 1], stars: [0, 1], orbits: [0, 5, 1], planets: [0, 16, 1], speed: [0, 3], galaxy: [0, 1, 1], meteors: [0, 1], adaptive: [0, 1, 1] };
+const GEOMETRY_KEYS = ['sigma', 'orbits', 'planets', 'adaptive'];
+// Nebula colors: violet, emerald, fire, ice. bg: center and edge of the sky; a, b, c: the gas (two main colors and the highlights); line: orbits
+const PALETTES = [
+  { bg: ['#0c0a26', '#020108'], a: [125, 60, 225], b: [40, 110, 255], c: [255, 115, 205], line: [175, 175, 255] },
+  { bg: ['#04151b', '#010406'], a: [20, 185, 150], b: [40, 110, 225], c: [165, 255, 175], line: [140, 240, 220] },
+  { bg: ['#1b0a0c', '#050102'], a: [235, 70, 40], b: [250, 165, 50], c: [255, 95, 150], line: [255, 205, 155] },
+  { bg: ['#061120', '#01030a'], a: [70, 140, 255], b: [150, 220, 255], c: [232, 242, 255], line: [190, 225, 255] },
+];
+
+/* ======================================================================
+   Random numbers and noise (seeded: desktop and preview show the same sky)
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const ss = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+/* ======================================================================
+   Icon field (CPU): s = signed distance to the edge of a group of icons (<0 inside), as in the other themes;
+   grid point (gx, gy) is at (gx * STEP - MARGIN, gy * STEP - MARGIN)
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null, nebNoise = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
+  }
+  // Nebula noise (independent of the icons): density, color mix and dark dust, at low resolution
+  const w = Math.ceil(W / NEB) + 1, h = Math.ceil(H / NEB) + 1;
+  nebNoise = { w, h, n1: new Float32Array(w * h), n2: new Float32Array(w * h), dust: new Float32Array(w * h) };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, px = x * NEB, py = y * NEB;
+    const wx = fbm(px * 0.0016, py * 0.0016, 31) * 260, wy = fbm(px * 0.0016, py * 0.0016, 32) * 260;   // warp: wispy, folded gas instead of round blobs
+    nebNoise.n1[i] = fbm((px + wx) * 0.0021, (py + wy) * 0.0021, 33);
+    nebNoise.n2[i] = fbm((px - wy) * 0.0034, (py + wx) * 0.0034, 34);
+    nebNoise.dust[i] = fbm((px + wy) * 0.0052, (py - wx) * 0.0052, 35);
+  }
+}
+function computeField(rects) {
+  const N = Gw * Gh, f1 = new Float32Array(N), sig = P.sigma, is1 = 1 / (sig * sig), wa = 26 * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx + MARGIN - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + MARGIN + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy + MARGIN - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + MARGIN + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP - MARGIN + NZ.wx[i] * wa, qy = gy * STEP - MARGIN + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  return s;
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max((x + MARGIN) / STEP, 0), Gw - 1.001), fy = Math.min(Math.max((y + MARGIN) / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+// Marching squares at level lv; the grid is padded with "outside" so every contour is a closed loop. Returns loops of [x0, y0, x1, y1, …] (CSS px)
+function contours(s, lv) {
+  const gw = Gw + 2, gh = Gh + 2, V = new Float32Array(gw * gh);
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++)
+    V[j * gw + i] = i < 1 || j < 1 || i > Gw || j > Gh ? 1e3 : s[(j - 1) * Gw + i - 1] - lv;
+  const pos = new Map(), adj = new Map();
+  const link = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); };
+  const hk = (i, j) => {
+    const k = (j * gw + i) * 2;
+    if (!pos.has(k)) { const a = V[j * gw + i], b = V[j * gw + i + 1]; pos.set(k, [(i - 1 + a / (a - b)) * STEP - MARGIN, (j - 1) * STEP - MARGIN]); }
+    return k;
+  };
+  const vk = (i, j) => {
+    const k = (j * gw + i) * 2 + 1;
+    if (!pos.has(k)) { const a = V[j * gw + i], b = V[(j + 1) * gw + i]; pos.set(k, [(i - 1) * STEP - MARGIN, (j - 1 + a / (a - b)) * STEP - MARGIN]); }
+    return k;
+  };
+  for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
+    const a = V[j * gw + i], b = V[j * gw + i + 1], c = V[(j + 1) * gw + i + 1], d = V[(j + 1) * gw + i];
+    const code = (a < 0 ? 8 : 0) | (b < 0 ? 4 : 0) | (c < 0 ? 2 : 0) | (d < 0 ? 1 : 0);
+    if (code === 0 || code === 15) continue;
+    const E = [() => hk(i, j), () => vk(i + 1, j), () => hk(i, j + 1), () => vk(i, j)];   // top, right, bottom, left
+    const seg = (p, q) => link(E[p](), E[q]());
+    const mid = (a + b + c + d) / 4 < 0;
+    switch (code) {
+      case 1: case 14: seg(3, 2); break;
+      case 2: case 13: seg(2, 1); break;
+      case 3: case 12: seg(3, 1); break;
+      case 4: case 11: seg(0, 1); break;
+      case 6: case 9: seg(0, 2); break;
+      case 7: case 8: seg(3, 0); break;
+      case 5: if (mid) { seg(0, 3); seg(1, 2); } else { seg(0, 1); seg(3, 2); } break;
+      case 10: if (mid) { seg(0, 1); seg(2, 3); } else { seg(0, 3); seg(1, 2); } break;
+    }
+  }
+  const loops = [], used = new Set();
+  for (const start of adj.keys()) {
+    if (used.has(start)) continue;
+    const pts = [];
+    let prev = -1, cur = start;
+    while (cur !== undefined && !used.has(cur)) {
+      used.add(cur);
+      const p = pos.get(cur); pts.push(p[0], p[1]);
+      const nb = adj.get(cur), next = nb[0] !== prev ? nb[0] : nb[1];
+      prev = cur; cur = next;
+    }
+    if (pts.length >= 16) loops.push(pts);
+  }
+  return loops;
+}
+
+/* ======================================================================
+   Scene geometry (CSS px; independent of the canvas resolution): orbits, planets, the galaxy's place
+   ====================================================================== */
+let icons = [];
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+const PLANET_TYPES = 7;
+function buildGeometry() {
+  // Not adapting, or an empty desktop: two suns of our own, drawn as stars
+  const rnd = mulberry32(seed * 5 + 1), suns = [];
+  if (!P.adaptive || !icons.length) for (let i = 0; i < 2; i++) suns.push({ cx: W * (0.2 + 0.6 * rnd()), cy: (H - TASKBAR) * (0.2 + 0.6 * rnd()), hw: 10, hh: 10, ph: rnd() * 6.28 });
+  const s = computeField(P.adaptive && icons.length ? iconRects() : suns);
+  const geo = { s, suns, orbits: [], planets: [], galaxy: null, rasters: [], nebulae: [] };
+  const sMax = P.sigma * 4.3;
+  for (let k = 0; k < P.orbits; k++) {
+    const lv = 32 + k * 46;
+    if (lv > sMax * 0.85) break;
+    for (const pts of contours(s, lv)) {
+      const cum = [0], n = pts.length / 2;
+      for (let i = 1; i <= n; i++) { const j = i % n; cum.push(cum[i - 1] + Math.hypot(pts[2 * j] - pts[2 * i - 2], pts[2 * j + 1] - pts[2 * i - 1])); }
+      if (cum[n] > 320) geo.orbits.push({ pts, cum, total: cum[n], k, n });
+    }
+  }
+  // Planets: spread over the orbits by length; inner orbits are faster; fixed random numbers per planet index
+  const all = geo.orbits.reduce((a, o) => a + o.total, 0);
+  for (let i = 0; i < P.planets && geo.orbits.length; i++) {
+    let d = hash2(i, 1, 41) * all, o = geo.orbits[0];
+    for (const q of geo.orbits) { o = q; d -= q.total; if (d <= 0) break; }
+    const size = hash2(i, 2, 41), type = (hash2(i, 3, 41) * PLANET_TYPES) | 0, r = 9 + 24 * size * size;
+    geo.planets.push({ o, d: hash2(i, 4, 41) * o.total, v: (hash2(i, 5, 41) < 0.5 ? -1 : 1) * (16 + 20 * hash2(i, 6, 41)) / Math.sqrt(1 + o.k * 0.7),
+      r, type, tilt: (hash2(i, 7, 41) - 0.5) * 1.2, ring: (type === 3 || type === 4 || type === 6) && r > 12 && hash2(i, 8, 41) < 0.6,
+      moons: r > 13 ? 1 + (hash2(i, 9, 41) * 2 | 0) : r > 9 && hash2(i, 9, 41) < 0.4 ? 1 : 0, ph: hash2(i, 10, 41) * 6.28, x: 0, y: 0, sun: 0 });
+  }
+  // Galaxy: the emptiest of a few fixed places (far from the icons and inside the screen)
+  let best = null;
+  for (let i = 0; i < 40; i++) {
+    const x = W * (0.08 + 0.84 * hash2(i, 1, 51)), y = (H - TASKBAR) * (0.1 + 0.8 * hash2(i, 2, 51));
+    const room = Math.min(sampleArr(s, x, y) - 50, x + 60, y + 60, W - x + 60, H - y + 60);
+    if (!best || room > best.room) best = { x, y, room };
+  }
+  if (best && best.room > 60) geo.galaxy = { x: best.x, y: best.y, R: Math.min(280, best.room * 1.15), tilt: hash2(7, 7, 52) * 3.14, flat: 0.42 + 0.3 * hash2(7, 8, 52) };
+  return geo;
+}
+function pointOn(o, d, out) {                    // point at distance d along a closed orbit
+  d = ((d % o.total) + o.total) % o.total;
+  let lo = 0, hi = o.n;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (o.cum[m] <= d) lo = m; else hi = m; }
+  const j = (lo + 1) % o.n, t = (d - o.cum[lo]) / Math.max(1e-6, o.cum[lo + 1] - o.cum[lo]), p = o.pts;
+  out[0] = p[2 * lo] + (p[2 * j] - p[2 * lo]) * t; out[1] = p[2 * lo + 1] + (p[2 * j + 1] - p[2 * lo + 1]) * t;
+}
+
+/* ======================================================================
+   Canvas and cached layers (drawn at the canvas's actual pixels; at most two sizes are kept: the screen and a share/recording size)
+   ====================================================================== */
+const cv = document.getElementById('art');
+const ctx = cv.getContext('2d', { alpha: false });
+function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
+function cached(list, build) {
+  const w = cv.width, h = cv.height, tag = P.palette + '|' + P.stars;
+  let hit = list.find(e => e.w === w && e.h === h && e.tag === tag);
+  if (!hit) { hit = { w, h, tag, c: build(w, h, cv._scale) }; list.unshift(hit); if (list.length > 2) list.pop(); }
+  return hit.c;
+}
+// Nebula of one geometry in one palette: gas density from the noise, brighter around the groups of icons, a bright rim just outside each group, dark inside
+function nebula(geo) {
+  let hit = geo.nebulae.find(e => e.palette === P.palette);
+  if (hit) return hit.c;
+  const { w, h, n1, n2, dust } = nebNoise, pal = PALETTES[P.palette], c = makeCanvas(w, h), x = c.getContext('2d'), img = x.createImageData(w, h), d = img.data, sig = P.sigma;
+  for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+    const i = py * w + px, s = sampleArr(geo.s, px * NEB, py * NEB);
+    const dens = ss(0.3, 0.7, n1[i]), halo = Math.exp(-Math.max(s, 0) / (sig * 1.7)), u = (s - 12) / 15, rim = Math.exp(-u * u);
+    // the rim is thin and broken up by the dust noise, so it reads as lit gas and not as a drawn outline
+    let I = dens * (0.34 + 0.8 * halo) + rim * (0.04 + 0.72 * (1 - ss(0.4, 0.6, dust[i])) * (0.4 + 0.6 * dens)) + halo * 0.09;
+    I *= 1 - 0.65 * ss(0.5, 0.78, dust[i]);
+    if (s < 6) I *= ss(-34, 6, s) * 0.85 + 0.03;   // inside a group: nearly dark, so the icon names stay readable
+    const m = ss(0.3, 0.7, n2[i]), hl = ss(0.62, 0.9, n1[i] * 0.55 + n2[i] * 0.45) * 0.7 + rim * 0.25;
+    for (let k = 0; k < 3; k++) {
+      const col = pal.a[k] + (pal.b[k] - pal.a[k]) * m;
+      d[i * 4 + k] = Math.min(255, (col + (pal.c[k] - col) * Math.min(1, hl)) * I);
+    }
+    d[i * 4 + 3] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  geo.nebulae.push({ palette: P.palette, c });
+  if (geo.nebulae.length > 2) geo.nebulae.shift();
+  return c;
+}
+const STAR_COLORS = [[255, 255, 255], [200, 220, 255], [255, 240, 205], [255, 205, 170], [180, 200, 255]];
+function buildStatic(geo, cw, ch, s) {
+  const pal = PALETTES[P.palette], c = makeCanvas(cw, ch), x = c.getContext('2d');
+  x.setTransform(s, 0, 0, s, 0, 0);
+  const bg = x.createRadialGradient(W * 0.5, H * 0.45, 0, W * 0.5, H * 0.45, Math.max(W, H) * 0.75);
+  bg.addColorStop(0, pal.bg[0]); bg.addColorStop(1, pal.bg[1]);
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  x.globalCompositeOperation = 'lighter'; x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+  x.drawImage(nebula(geo), 0, 0, nebNoise.w * NEB, nebNoise.h * NEB);
+  // stars: many faint ones, a few bright ones with a soft halo; fewer where the gas is thick
+  const r = mulberry32(seed + 11);
+  for (let i = 0, n = Math.round(P.stars * W * H / 520); i < n; i++) {
+    const sx = r() * W, sy = r() * H, b = Math.pow(r(), 5), col = STAR_COLORS[(r() * STAR_COLORS.length) | 0];
+    x.fillStyle = rgba(col, 0.18 + 0.82 * Math.min(1, b * 3 + r() * 0.3));
+    const rad = 0.3 + 0.4 * r() + 1.1 * b;
+    x.beginPath(); x.arc(sx, sy, rad, 0, 6.29); x.fill();
+    if (b > 0.5) { const g = x.createRadialGradient(sx, sy, 0, sx, sy, rad * 5); g.addColorStop(0, rgba(col, 0.3)); g.addColorStop(1, rgba(col, 0)); x.fillStyle = g; x.fillRect(sx - rad * 5, sy - rad * 5, rad * 10, rad * 10); }
+  }
+  x.globalCompositeOperation = 'source-over';
+  // orbit lines: thin, fainter further out
+  x.lineWidth = 1; x.lineJoin = 'round';
+  for (const o of geo.orbits) {
+    const L = o.pts, n = o.n;
+    x.strokeStyle = rgba(pal.line, 0.3 - o.k * 0.045);
+    x.beginPath(); x.moveTo((L[2 * n - 2] + L[0]) / 2, (L[2 * n - 1] + L[1]) / 2);
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; x.quadraticCurveTo(L[2 * i], L[2 * i + 1], (L[2 * i] + L[2 * j]) / 2, (L[2 * i + 1] + L[2 * j + 1]) / 2); }
+    x.stroke();
+  }
+  const vg = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.5, W / 2, H / 2, Math.max(W, H) * 0.8);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+  x.fillStyle = vg; x.fillRect(0, 0, W, H);
+  return c;
+}
+
+/* ======================================================================
+   Sprites (drawn once)
+   ====================================================================== */
+function glowSprite(col, core, mid = 0.2) {
+  const S = 128, c = makeCanvas(S, S), x = c.getContext('2d'), g = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, core); g.addColorStop(mid, rgba(col, 0.5)); g.addColorStop(1, rgba(col, 0));
+  x.fillStyle = g; x.fillRect(0, 0, S, S);
+  return c;
+}
+const GLOWS = STAR_COLORS.map(c => glowSprite(c, 'rgba(255,255,255,1)', 0.09));
+const SUN = glowSprite([255, 190, 90], 'rgba(255,250,235,1)', 0.14);
+// Planet bodies: evenly lit discs (the shadow side is a separate sprite, turned toward the suns every frame)
+function planetSprite(type) {
+  const S = 128, R = 60, c = makeCanvas(S, S), x = c.getContext('2d'), r = mulberry32(900 + type * 17);
+  x.translate(S / 2, S / 2);
+  x.beginPath(); x.arc(0, 0, R, 0, 6.29); x.clip();
+  const fill = col => { x.fillStyle = col; x.fillRect(-R, -R, 2 * R, 2 * R); };
+  const blob = (col, n, r0, r1) => { x.fillStyle = col; for (let i = 0; i < n; i++) { x.beginPath(); x.ellipse((r() - 0.5) * 2 * R, (r() - 0.5) * 2 * R, r0 + r() * r1, (r0 + r() * r1) * (0.5 + 0.5 * r()), r() * 3, 0, 6.29); x.fill(); } };
+  const bands = cols => { let y = -R; while (y < R) { const hgt = 6 + r() * 16; x.fillStyle = cols[(r() * cols.length) | 0]; x.beginPath(); x.moveTo(-R, y); x.bezierCurveTo(-R / 3, y + (r() - 0.5) * 6, R / 3, y + (r() - 0.5) * 6, R, y); x.lineTo(R, y + hgt + 4); x.lineTo(-R, y + hgt + 4); x.fill(); y += hgt; } };
+  if (type === 0) {                                // rocky, cratered
+    fill('#8f8a84'); blob('rgba(60,56,52,0.35)', 9, 10, 22);
+    for (let i = 0; i < 16; i++) { const cx = (r() - 0.5) * 2 * R, cy = (r() - 0.5) * 2 * R, cr = 3 + r() * 9; x.fillStyle = 'rgba(50,46,44,0.6)'; x.beginPath(); x.arc(cx, cy, cr, 0, 6.29); x.fill(); x.strokeStyle = 'rgba(220,215,205,0.5)'; x.lineWidth = 1.2; x.beginPath(); x.arc(cx, cy, cr, 2.4, 5.2); x.stroke(); }
+  } else if (type === 1) {                         // red desert with a polar cap
+    fill('#c5633a'); blob('rgba(110,40,24,0.5)', 10, 8, 26); blob('rgba(235,160,100,0.4)', 7, 6, 18);
+    x.fillStyle = 'rgba(250,245,240,0.9)'; x.beginPath(); x.ellipse(0, -R * 0.93, R * 0.55, R * 0.2, 0, 0, 6.29); x.fill();
+  } else if (type === 2) {                         // oceans, continents, clouds
+    fill('#2a6fc0'); blob('rgba(60,150,90,0.95)', 8, 8, 22); blob('rgba(150,130,80,0.7)', 5, 5, 12);
+    x.fillStyle = 'rgba(255,255,255,0.7)'; for (let i = 0; i < 9; i++) { x.beginPath(); x.ellipse((r() - 0.5) * 2 * R, (r() - 0.5) * 2 * R, 14 + r() * 24, 3 + r() * 4, (r() - 0.5) * 0.6, 0, 6.29); x.fill(); }
+  } else if (type === 3) {                         // gas giant with a storm
+    bands(['#d9b98a', '#c49a66', '#efe0c0', '#a9774a', '#e6cfa2']);
+    x.fillStyle = 'rgba(170,70,40,0.85)'; x.beginPath(); x.ellipse(R * 0.25, R * 0.3, 15, 8, 0, 0, 6.29); x.fill();
+  } else if (type === 4) {                         // ice giant
+    bands(['#8fd6e6', '#7cc6dc', '#a8e4ee', '#6fb6d2']);
+  } else if (type === 5) {                         // lava world: dark crust, glowing cracks
+    fill('#2a1a16'); blob('rgba(70,40,30,0.8)', 8, 8, 20);
+    x.lineCap = 'round';
+    for (let i = 0; i < 14; i++) { let px = (r() - 0.5) * 2 * R, py = (r() - 0.5) * 2 * R; x.beginPath(); x.moveTo(px, py); for (let k = 0; k < 4; k++) { px += (r() - 0.5) * 40; py += (r() - 0.5) * 40; x.lineTo(px, py); } x.strokeStyle = 'rgba(255,90,20,0.35)'; x.lineWidth = 5; x.stroke(); x.strokeStyle = '#ffb040'; x.lineWidth = 1.6; x.stroke(); }
+  } else {                                         // violet gas giant
+    bands(['#b08ae0', '#8a5fc8', '#d6b8f2', '#6d45a8', '#c49ae8']);
+  }
+  const limb = x.createRadialGradient(0, 0, R * 0.55, 0, 0, R);
+  limb.addColorStop(0, 'rgba(0,0,0,0)'); limb.addColorStop(1, 'rgba(0,0,10,0.45)');
+  x.fillStyle = limb; x.fillRect(-R, -R, 2 * R, 2 * R);
+  return c;
+}
+const PLANETS = Array.from({ length: PLANET_TYPES }, (_, i) => planetSprite(i));
+// Night side: transparent toward +x (where the suns are once the sprite is turned), dark on the far side
+const SHADE = (() => {
+  const S = 128, R = 60.6, c = makeCanvas(S, S), x = c.getContext('2d');
+  x.translate(S / 2, S / 2); x.beginPath(); x.arc(0, 0, R, 0, 6.29); x.clip();
+  const g = x.createRadialGradient(R * 0.62, 0, R * 0.25, R * 0.12, 0, R * 1.3);
+  g.addColorStop(0, 'rgba(255,255,255,0.14)'); g.addColorStop(0.3, 'rgba(0,0,8,0)'); g.addColorStop(0.62, 'rgba(0,0,8,0.5)'); g.addColorStop(1, 'rgba(0,0,8,0.95)');
+  x.fillStyle = g; x.fillRect(-R, -R, 2 * R, 2 * R);
+  return c;
+})();
+const PLANET_TINT = [[190, 185, 175], [230, 130, 90], [110, 170, 255], [230, 195, 140], [150, 220, 235], [255, 150, 70], [190, 150, 240]];
+// Spiral galaxy seen face on (it is flattened and turned when drawn): a bright core and two arms of thousands of stars
+const galaxies = [];
+function galaxySprite() {
+  if (galaxies[P.palette]) return galaxies[P.palette];
+  const S = 512, c = makeCanvas(S, S), x = c.getContext('2d'), r = mulberry32(4711), pal = PALETTES[P.palette];
+  x.globalCompositeOperation = 'lighter';
+  const halo = x.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  halo.addColorStop(0, 'rgba(255,244,215,0.95)'); halo.addColorStop(0.07, 'rgba(255,225,170,0.6)'); halo.addColorStop(0.22, rgba(pal.c, 0.16)); halo.addColorStop(0.6, rgba(pal.b, 0.05)); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  x.fillStyle = halo; x.fillRect(0, 0, S, S);
+  for (let i = 0; i < 6200; i++) {
+    const t = Math.pow(r(), 0.6), rad = t * S * 0.47, spread = (r() + r() + r() - 1.5) * (0.75 - 0.4 * t);
+    const ang = (i % 2) * Math.PI + t * 5.4 + spread, px = S / 2 + Math.cos(ang) * rad, py = S / 2 + Math.sin(ang) * rad, w = r();
+    const col = pal.b.map((v, k) => Math.round(v + ((w < 0.25 ? pal.c[k] : 255) - v) * r()));
+    x.fillStyle = rgba(col, (1 - t) * 0.5 + 0.07);
+    const sz = 0.7 + r() * 1.5; x.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+  }
+  return (galaxies[P.palette] = c);
+}
+// Comet, flying toward +x: a bright head, a narrow blue gas tail and a wider pale dust tail
+const COMET = (() => {
+  const c = makeCanvas(480, 160), x = c.getContext('2d');
+  x.globalCompositeOperation = 'lighter';
+  const tail = (w, bend, col, a, blur) => {      // blurred once here, so the tail has no hard edges
+    const g = x.createLinearGradient(430, 0, 20, 0); g.addColorStop(0, rgba(col, a)); g.addColorStop(0.3, rgba(col, a * 0.35)); g.addColorStop(1, rgba(col, 0));
+    x.filter = `blur(${blur}px)`;
+    x.fillStyle = g; x.beginPath(); x.moveTo(432, 80 - 3); x.quadraticCurveTo(250, 80 - w * 0.35 + bend * 0.5, 10, 80 - w + bend); x.lineTo(10, 80 + w + bend); x.quadraticCurveTo(250, 80 + w * 0.35 + bend * 0.5, 432, 80 + 3); x.fill();
+    x.filter = 'none';
+  };
+  tail(30, 20, [255, 238, 210], 0.42, 7); tail(16, 12, [255, 245, 230], 0.3, 4); tail(7, -9, [120, 185, 255], 0.75, 3);
+  const g = x.createRadialGradient(432, 80, 0, 432, 80, 30); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.2, 'rgba(200,235,255,0.7)'); g.addColorStop(1, 'rgba(120,190,255,0)');
+  x.fillStyle = g; x.fillRect(402, 50, 60, 60);
+  return c;
+})();
+
+/* ======================================================================
+   Moving things
+   ====================================================================== */
+let twinkles = [], meteors = [], meteorWait = 2, comet = null, cometWait = PREVIEW ? 6 : 25 + Math.random() * 30, nova = null, novaWait = PREVIEW ? 9 : 15 + Math.random() * 20, spin = 0;
+function initTwinkles() {
+  const r = mulberry32(seed + 23);
+  twinkles = Array.from({ length: Math.round(W * H / 16000) }, () => ({ x: r() * W, y: r() * H, ph: r() * 6.28, rate: 0.6 + 2.2 * r(), sz: 7 + 13 * r() * r(), k: (r() * GLOWS.length) | 0 }));
+}
+function step(dt) {
+  const sp = P.speed;
+  spin += dt * 0.035 * sp;
+  if (geoNew) for (const p of geoNew.planets) p.d += p.v * sp * dt;
+  // shooting stars
+  meteorWait -= dt * P.meteors;
+  if (meteorWait <= 0 && P.meteors > 0) {
+    meteorWait = 0.6 + Math.random() * 2.6;
+    const a = 0.35 + Math.random() * 0.9 + (Math.random() < 0.5 ? 0 : Math.PI - 1.6), v = 520 + Math.random() * 520;
+    meteors.push({ x: Math.random() * W, y: Math.random() * H * 0.7, vx: Math.cos(a) * v, vy: Math.abs(Math.sin(a)) * v, age: 0, life: 0.45 + Math.random() * 0.6, len: 70 + Math.random() * 130 });
+  }
+  for (const m of meteors) { m.age += dt; m.x += m.vx * dt; m.y += m.vy * dt; }
+  meteors = meteors.filter(m => m.age < m.life);
+  // comet: a slow crossing every now and then (only when shooting stars are on)
+  if (!comet && P.meteors > 0) {
+    cometWait -= dt;
+    if (cometWait <= 0) {
+      const fromLeft = Math.random() < 0.5, A = [fromLeft ? -260 : W + 260, H * (0.05 + 0.5 * Math.random())], B = [fromLeft ? W + 260 : -260, H * (0.2 + 0.7 * Math.random())];
+      comet = { A, B, t: 0, dur: Math.hypot(B[0] - A[0], B[1] - A[1]) / 110, ang: Math.atan2(B[1] - A[1], B[0] - A[0]), size: 300 + Math.random() * 160 };
+    }
+  } else if (comet) {
+    comet.t += dt / comet.dur;
+    if (comet.t >= 1 || P.meteors <= 0) { comet = null; cometWait = PREVIEW ? 16 + Math.random() * 10 : 50 + Math.random() * 70; }
+  }
+  // nova: one of the twinkling stars flares up for a few seconds
+  if (!nova) { novaWait -= dt; if (novaWait <= 0 && twinkles.length) nova = { s: twinkles[(Math.random() * twinkles.length) | 0], age: 0 }; }
+  else { nova.age += dt; if (nova.age > 4.2) { nova = null; novaWait = PREVIEW ? 10 + Math.random() * 8 : 18 + Math.random() * 30; } }
+}
+
+/* ======================================================================
+   Frame
+   ====================================================================== */
+let geoOld = null, geoNew = null, morphT0 = -1e9, morphDur = MORPH_MS;
+function commit(fromEmpty = false) {
+  const g = buildGeometry();
+  geoOld = fromEmpty ? null : geoNew; geoNew = g;
+  morphT0 = performance.now(); morphDur = fromEmpty ? 2400 : MORPH_MS;
+  if (paused || !previewMotion) { morphT0 = -1e9; draw(performance.now()); }   // paused: show the final state right away
+}
+let rebuildT = 0;
+function rebuildSoon() { clearTimeout(rebuildT); rebuildT = setTimeout(() => commit(false), PREVIEW ? 40 : 160); }
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // Preview mode: the page is laid out at the full desktop size and then scaled down as a whole, so the canvas only needs a low resolution
+  const scale = PREVIEW ? 0.45 : devicePixelRatio || 1;
+  // Use the size the canvas actually occupies (with decimals), otherwise the browser rescales the whole picture and blurs it
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil((W + 2 * MARGIN) / STEP) + 2; Gh = Math.ceil((H + 2 * MARGIN) / STEP) + 2;
+  buildNoise();
+  initTwinkles();
+}
+
+const T0 = performance.now();
+let lastT = 0, frameN = 0;
+let previewMotion = !PREVIEW, hostDragging = false;
+let paused = false;                              // host notification: a maximized / fullscreen window hides this monitor → pause
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!window.dynamicDesktopRecording && (paused || !previewMotion)) { lastT = 0; return; }
+  const interval = hostDragging ? 100 : !PREVIEW && now - morphT0 < morphDur ? 1000 / 60 : 1000 / 30;
+  if (P.cap30 && now - lastT < interval - 2) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  lastT = now;
+  step(dt);
+  draw(now);
+  frameN++;
+}
+const pt = [0, 0];
+function drawPlanets(geo, alpha, s, t) {
+  if (alpha <= 0) return;
+  const k = s;
+  for (const p of geo.planets) {
+    pointOn(p.o, p.d, pt);
+    const x = pt[0], y = pt[1];
+    if (x < -60 || y < -60 || x > W + 60 || y > H + 60) continue;
+    const tint = PLANET_TINT[p.type], dir = Math.sign(p.v);
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.lineCap = 'round'; ctx.lineWidth = Math.max(1, p.r * 0.16);
+    let px = x, py = y;
+    for (let i = 1; i <= 9; i++) {                 // trail along the orbit behind the planet
+      pointOn(p.o, p.d - dir * i * (7 + p.r * 0.5), pt);
+      ctx.strokeStyle = rgba(tint, alpha * 0.34 * (1 - i / 10));
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(pt[0], pt[1]); ctx.stroke();
+      px = pt[0]; py = pt[1];
+    }
+    // the suns are where the field falls
+    const gx = sampleArr(geo.s, x + 6, y) - sampleArr(geo.s, x - 6, y), gy = sampleArr(geo.s, x, y + 6) - sampleArr(geo.s, x, y - 6);
+    const sun = Math.atan2(-gy, -gx), ct = Math.cos(p.tilt), st = Math.sin(p.tilt);
+    ctx.globalAlpha = alpha;
+    const ring = half => {                         // ring: the far half before the planet, the near half after it
+      ctx.setTransform(k * ct, k * st, -k * st, k * ct, x * k, y * k);
+      ctx.lineWidth = p.r * 0.34; ctx.strokeStyle = rgba(tint.map(v => Math.round(v * 0.8 + 50)), 0.55);
+      ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.95, p.r * 0.52, 0, half ? 0 : Math.PI, half ? Math.PI : 2 * Math.PI); ctx.stroke();
+      ctx.lineWidth = p.r * 0.07; ctx.strokeStyle = 'rgba(20,16,30,0.55)';
+      ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.92, p.r * 0.5, 0, half ? 0 : Math.PI, half ? Math.PI : 2 * Math.PI); ctx.stroke();
+    };
+    if (p.ring) ring(false);
+    ctx.setTransform(k * ct, k * st, -k * st, k * ct, x * k, y * k);
+    ctx.drawImage(PLANETS[p.type], -p.r, -p.r, p.r * 2, p.r * 2);
+    const cs = Math.cos(sun), sn = Math.sin(sun);
+    ctx.setTransform(k * cs, k * sn, -k * sn, k * cs, x * k, y * k);
+    ctx.drawImage(SHADE, -p.r * 1.01, -p.r * 1.01, p.r * 2.02, p.r * 2.02);
+    if (p.ring) ring(true);
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    for (let m = 0; m < p.moons; m++) {            // moons on small flat orbits
+      const a = t * (0.9 + m * 0.5) * P.speed + p.ph + m * 2.4, mr = p.r * (1.7 + m * 0.75), mx = x + Math.cos(a) * mr, my = y + Math.sin(a) * mr * 0.45;
+      if (Math.sin(a) < 0 && Math.abs(mx - x) < p.r) continue;   // behind the planet
+      ctx.fillStyle = 'rgba(215,215,225,1)'; ctx.beginPath(); ctx.arc(mx, my, Math.max(1.2, p.r * 0.14), 0, 6.29); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function draw(now) {
+  const s = cv._scale, t = (now - T0) / 1000, e = Math.min(Math.max((now - morphT0) / morphDur, 0), 1), k = e * e * (3 - 2 * e);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!geoNew) { ctx.fillStyle = PALETTES[P.palette].bg[1]; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  // the static layers are opaque: the old one (or the bare sky color) first, the new one fading in on top
+  if (e < 1) {
+    if (geoOld) ctx.drawImage(cached(geoOld.rasters, (w, h, q) => buildStatic(geoOld, w, h, q)), 0, 0);
+    else { ctx.fillStyle = PALETTES[P.palette].bg[1]; ctx.fillRect(0, 0, cv.width, cv.height); }
+    ctx.globalAlpha = k;
+  }
+  ctx.drawImage(cached(geoNew.rasters, (w, h, q) => buildStatic(geoNew, w, h, q)), 0, 0);
+  const aNew = e < 1 ? k : 1;
+  ctx.globalCompositeOperation = 'lighter';
+  const g = geoNew.galaxy;
+  if (g && P.galaxy) {                             // galaxy: turned (spin), flattened, tilted
+    const ct = Math.cos(g.tilt), st = Math.sin(g.tilt), cp = Math.cos(spin), sp = Math.sin(spin), f = g.flat;
+    ctx.setTransform(s * (ct * cp - st * f * sp), s * (st * cp + ct * f * sp), s * (-ct * sp - st * f * cp), s * (-st * sp + ct * f * cp), g.x * s, g.y * s);
+    ctx.globalAlpha = 0.9 * aNew;
+    ctx.drawImage(galaxySprite(), -g.R, -g.R, g.R * 2, g.R * 2);
+  }
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  for (const w of twinkles) {                      // twinkling stars
+    const b = 0.5 + 0.5 * Math.sin(t * w.rate + w.ph);
+    ctx.globalAlpha = 0.15 + 0.85 * b * b * b;
+    ctx.drawImage(GLOWS[w.k], w.x - w.sz / 2, w.y - w.sz / 2, w.sz, w.sz);
+  }
+  if (nova) {                                      // nova: a fast flare, a slow fade, four thin rays
+    const u = nova.age / 4.2, a = Math.min(1, u * 9) * Math.pow(1 - u, 1.6), sz = 34 + 150 * a, n = nova.s;
+    ctx.globalAlpha = a;
+    ctx.drawImage(GLOWS[n.k], n.x - sz / 2, n.y - sz / 2, sz, sz);
+    ctx.drawImage(GLOWS[0], n.x - sz * 1.5, n.y - 1.2, sz * 3, 2.4); ctx.drawImage(GLOWS[0], n.x - 1.2, n.y - sz * 1.5, 2.4, sz * 3);
+  }
+  for (const sun of geoNew.suns) {                 // our own suns (only without icons): a pulsing star
+    const sz = 150 + 14 * Math.sin(t * 0.8 + sun.ph);
+    ctx.globalAlpha = aNew;
+    ctx.drawImage(SUN, sun.cx - sz / 2, sun.cy - sz / 2, sz, sz);
+    ctx.drawImage(GLOWS[0], sun.cx - 17, sun.cy - 17, 34, 34);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  if (geoOld && e < 1) drawPlanets(geoOld, 1 - k, s, t);
+  drawPlanets(geoNew, aNew, s, t);
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.globalCompositeOperation = 'lighter';
+  if (comet) {
+    const c = comet, x = c.A[0] + (c.B[0] - c.A[0]) * c.t, y = c.A[1] + (c.B[1] - c.A[1]) * c.t, cs = Math.cos(c.ang) * s, sn = Math.sin(c.ang) * s, q = c.size / 480;
+    ctx.setTransform(cs, sn, -sn, cs, x * s, y * s);
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(COMET, -432 * q, -80 * q, 480 * q, 160 * q);
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+  }
+  ctx.lineCap = 'round';
+  for (const m of meteors) {                       // shooting stars: a short streak that fades at both ends of its life
+    const u = m.age / m.life, a = Math.sin(Math.PI * u), v = Math.hypot(m.vx, m.vy), tx = m.x - m.vx / v * m.len, ty = m.y - m.vy / v * m.len;
+    const g2 = ctx.createLinearGradient(m.x, m.y, tx, ty);
+    g2.addColorStop(0, `rgba(255,255,255,${a})`); g2.addColorStop(0.25, `rgba(190,220,255,${a * 0.5})`); g2.addColorStop(1, 'rgba(160,200,255,0)');
+    ctx.globalAlpha = 1; ctx.strokeStyle = g2; ctx.lineWidth = 1.7;
+    ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.globalAlpha = a; ctx.drawImage(GLOWS[1], m.x - 7, m.y - 7, 14, 14);
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+
+/* ======================================================================
+   Hosted mode: the scene is driven from outside
+   - Wallpaper mode (?wallpaper=1): the desktop host sends messages through WebView2
+   - Preview mode (?preview=1): the settings window sends messages through the iframe's postMessage
+   Messages: icons (real icon rectangles, physical pixels) / settings (parameters, partial update) / reset (restore defaults) / pause
+   ====================================================================== */
+let iconsSeen = false;
+function reseed(v) {
+  seed = v; buildNoise(); initTwinkles();
+  if (iconsSeen) commit(true);
+}
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // "Refresh" in the settings window: new sky (desktop and preview use the same seed)
+  let geometry = false, redraw = false;
+  for (const k in v) {
+    const r = RANGES[k];
+    if (!r || typeof v[k] !== 'number' || !Number.isFinite(v[k])) continue;
+    const val = Math.min(r[1], Math.max(r[0], r[2] ? Math.round(v[k]) : v[k]));
+    if (P[k] === val) continue;
+    P[k] = val;
+    if (GEOMETRY_KEYS.includes(k)) geometry = true;
+    if (k === 'palette' || k === 'stars' || k === 'galaxy') redraw = true;   // the cached layers are kept per palette and star density: nothing to rebuild here
+  }
+  if (geometry && iconsSeen) rebuildSoon();
+  else if (redraw && (paused || !previewMotion) && iconsSeen) draw(performance.now());
+}
+function drawGhosts() {
+  document.getElementById('ghosts').innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+function startHostedMode() {
+  if (PREVIEW) document.body.classList.add('ghosts');
+  let first = true;
+  const settlePaused = () => { if ((paused || !previewMotion) && iconsSeen) { morphT0 = -1e9; draw(performance.now()); } };
+  const handle = m => {
+    if (m.t === 'previewMotion' && PREVIEW) { previewMotion = !!m.v; settlePaused(); return; }
+    if (m.t === 'dragging') { hostDragging = !!m.v; return; }
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; settlePaused(); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical pixels → CSS pixels
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    clearTimeout(rebuildT);
+    commit(first);                                // first time: the sky fades in; afterwards: old and new scene cross-fade
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+// Opened directly in a browser: a sample desktop (for work on the theme); R = new sky
+function startStandalone() {
+  document.body.classList.add('ghosts');
+  const cell = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H, w: CELL_W, h: 92 });
+  icons = [];
+  for (let c = 0; c < 3; c++) for (let r = 0; r < Math.min(8, Math.floor((H - TASKBAR) / CELL_H)); r++) icons.push(cell(c, r));
+  for (const [c, r] of [[7, 1], [8, 1], [8, 2], [13, 4], [14, 4], [19, 0], [19, 1]]) if (GRID_X0 + (c + 1) * CELL_W < W) icons.push(cell(c, r));
+  drawGhosts();
+  iconsSeen = true;
+  commit(true);
+  addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') reseed((Math.random() * 1e6) | 0); });
+}
+
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { resize(); if (iconsSeen) { commit(false); morphT0 = -1e9; } }, 100);
+});
+
+resize();
+if (WALL || PREVIEW) startHostedMode(); else startStandalone();
+requestAnimationFrame(frame);
+</script>
+<script src="community-effects.js"></script>
+<script src="share.js"></script>   <!-- Share image / share animation (sample icons, names as color blocks) -->
+</body>
+</html>

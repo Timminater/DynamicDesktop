@@ -1,7 +1,9 @@
 param(
     [string]$NsisCompiler,
-    [string]$WebView2Bootstrapper,
-    [switch]$SkipBuild
+    [string]$WebView2Package,
+    [switch]$SkipBuild,
+    [switch]$PortableOnly,
+    [switch]$SourceOnly
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -11,52 +13,70 @@ $dist = Join-Path $root 'dist'
 $cache = Join-Path $dist 'installer-tools'
 $payload = Join-Path $dist ('payload-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $cache, $payload | Out-Null
-if (-not $SkipBuild) { & (Join-Path $root 'host\build.ps1') }
+if (-not $SkipBuild -and -not $SourceOnly) { & (Join-Path $root 'host\build.ps1') -WebView2Package $WebView2Package }
 
-if (-not $NsisCompiler) {
+if (-not $PortableOnly -and -not $SourceOnly -and -not $NsisCompiler) {
     $nsisArchive = Join-Path $cache 'nsis-3.13.zip'
     $NsisCompiler = Join-Path $cache 'nsis-3.13\makensis.exe'
     if (-not (Test-Path -LiteralPath $NsisCompiler)) {
-        Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $nsisArchive -UseBasicParsing
-        if ((Get-FileHash -LiteralPath $nsisArchive -Algorithm SHA256).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') { throw 'NSIS archive checksum mismatch' }
+        $nsisHash = 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8'
+        if (-not (Test-Path -LiteralPath $nsisArchive) -or (Get-FileHash -LiteralPath $nsisArchive -Algorithm SHA256).Hash -ne $nsisHash) {
+            throw 'Provide a local NSIS compiler with -NsisCompiler or place the verified NSIS 3.13 ZIP in dist/installer-tools.'
+        }
         Expand-Archive -LiteralPath $nsisArchive -DestinationPath $cache -Force
     }
 }
-if (-not $WebView2Bootstrapper) {
-    $WebView2Bootstrapper = Join-Path $cache 'MicrosoftEdgeWebview2Setup.exe'
-    if (-not (Test-Path -LiteralPath $WebView2Bootstrapper)) {
-        Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $WebView2Bootstrapper -UseBasicParsing
-    }
+if (-not $PortableOnly -and -not $SourceOnly) {
+    if (-not (Test-Path -LiteralPath $NsisCompiler)) { throw 'NSIS compiler missing' }
+    $NsisCompiler = (Resolve-Path -LiteralPath $NsisCompiler).Path
 }
-$signature = Get-AuthenticodeSignature -LiteralPath $WebView2Bootstrapper
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation,') { throw 'WebView2 bootstrapper must have a valid Microsoft signature' }
-if (-not (Test-Path -LiteralPath $NsisCompiler)) { throw 'NSIS compiler missing' }
-$NsisCompiler = [IO.Path]::GetFullPath($NsisCompiler)
-$WebView2Bootstrapper = [IO.Path]::GetFullPath($WebView2Bootstrapper)
 
 # A fixed source list prevents other editions or private working files entering this package.
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
-    'host\DesktopHost.cs', 'host\DesklandPreview.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
-    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json')
-$themeFiles = @('flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js',
-    'i18n\en.json', 'i18n\zh-CN.json', 'thumbs\beach.webp', 'thumbs\meadow.webp',
+    'host\DesktopHost.cs', 'host\Themes.cs', 'host\DynamicDesktop.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
+    'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json',
+    'docs\images\beach.webp', 'docs\images\meadow.webp', 'docs\images\maldives.webp')
+$themeFiles = @('flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'serve.ps1', 'themes.json',
+    'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js', 'environment.js', 'community-effects.js', 'living-designs.js', 'woodland.js', 'landscape.js',
+    'locations.js',
+    'i18n\en.json', 'i18n\nl.json',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
     'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
-$locked = @($themes | Where-Object { $_.locked -eq $true })
-if ($themes.Count -ne 13 -or $ready.Count -ne 2 -or $locked.Count -ne 11 -or (($ready.id | Sort-Object) -join ',' -ne 'beach,meadow')) {
-    throw 'Expected two usable themes and eleven locked preview cards'
+$freePages = @{
+    beach = 'flat.html'; meadow = 'meadow.html'; isles = 'isles.html'; circuit = 'circuit.html'; steampunk = 'steam.html'
+    cosmos = 'cosmos.html'; 'living-lagoon' = 'living-lagoon.html'; 'living-sky' = 'living-sky.html'
+    'living-colors' = 'living-colors.html'; 'community-sky' = 'community-sky.html'; woodland = 'woodland.html'
+    'beach-turquoise' = 'landscape.html?theme=beach-turquoise'
+    'lake' = 'landscape.html?theme=lake'
+    'sky' = 'landscape.html?theme=sky'
+    'ocean' = 'landscape.html?theme=ocean'
+    'forest' = 'landscape.html?theme=forest'
+    'pinkforest' = 'landscape.html?theme=pinkforest'
+    'map' = 'landscape.html?theme=map'
+    'citymap' = 'landscape.html?theme=citymap'
+    'worldmap' = 'landscape.html?theme=worldmap'
+    'nauticalmap' = 'landscape.html?theme=nauticalmap'
+    'lotus' = 'landscape.html?theme=lotus'
 }
-foreach ($theme in $locked) {
-    if ($theme.page -or $theme.groups) { throw 'Locked themes must not contain page source or settings' }
+if ($ready.Count -ne $freePages.Count -or $themes.Count -ne $ready.Count -or
+    @($themes.id | Sort-Object -Unique).Count -ne $themes.Count) { throw 'Unexpected theme catalog' }
+foreach ($theme in $ready) {
+    if ($theme.locked -or -not $freePages.ContainsKey($theme.id) -or
+        $theme.page -cne $freePages[$theme.id]) { throw 'Unexpected free theme: ' + $theme.id }
+    $file = ($theme.page -split '\?', 2)[0]
+    if ($themeFiles -notcontains $file) { $themeFiles += $file }
 }
 foreach ($theme in $themes) {
-    $match = [regex]::Match([string]$theme.thumb, 'url\(thumbs/([^\)?]+)')
-    if (-not $match.Success) { throw 'Missing thumbnail URL: ' + $theme.id }
+    $match = [regex]::Match([string]$theme.thumb, '^url\(([^\)?]+)')
+    if (-not $match.Success) {
+        if (([string]$theme.thumb).Contains('url(')) { throw 'Missing thumbnail URL: ' + $theme.id }
+        continue
+    }
     $thumbName = [uri]::UnescapeDataString($match.Groups[1].Value)
-    if ($thumbName -notmatch '^[^\\/]+\.webp$') { throw 'Unexpected thumbnail path: ' + $thumbName }
-    $thumbFile = 'thumbs\' + $thumbName
+    if ($thumbName -notmatch '^(thumbs/[\w -]+\.webp|living-thumbs/[\w-]+\.svg)$') { throw 'Unexpected thumbnail path: ' + $thumbName }
+    $thumbFile = $thumbName.Replace('/', '\')
     if ($themeFiles -notcontains $thumbFile) { $themeFiles += $thumbFile }
 }
 $sources += $themeFiles | ForEach-Object { 'prototype\' + $_ }
@@ -67,16 +87,39 @@ foreach ($file in $sources) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination $target
 }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($sourceStage, (Join-Path $payload 'Deskland-source.zip'))
+[IO.Compression.ZipFile]::CreateFromDirectory($sourceStage, (Join-Path $payload 'DynamicDesktop-source.zip'))
+$sourceOutput = Join-Path $dist 'DynamicDesktop-source.zip'
+Copy-Item -LiteralPath (Join-Path $payload 'DynamicDesktop-source.zip') -Destination $sourceOutput -Force
+Write-Host "Source: $sourceOutput"
+if ($SourceOnly) { return }
 # Only program data is installed. The accompanying ZIP contains the exact corresponding source.
-$runtimeFiles = @('host\bin\Deskland.exe', 'host\bin\DesklandPreview.ico', 'host\bin\Microsoft.Web.WebView2.Core.dll', 'host\bin\Microsoft.Web.WebView2.WinForms.dll', 'host\bin\WebView2Loader.dll')
-$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md') + @($themeFiles | Where-Object { $_ -ne 'serve.mjs' } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
+$runtimeFiles = @('host\bin\DynamicDesktop.exe', 'host\bin\DynamicDesktop.ico', 'host\bin\Microsoft.Web.WebView2.Core.dll', 'host\bin\Microsoft.Web.WebView2.WinForms.dll', 'host\bin\WebView2Loader.dll')
+$installFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md') + @($themeFiles | Where-Object { $_ -notin @('serve.mjs', 'serve.ps1') } | ForEach-Object { 'prototype\' + $_ }) + $runtimeFiles
 foreach ($file in $installFiles) {
     $target = Join-Path $payload $file
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination $target
 }
-$installFiles += 'Deskland-source.zip'
+$installFiles += 'DynamicDesktop-source.zip'
+if ($PortableOnly) {
+    $portableStage = Join-Path $payload 'portable'
+    foreach ($file in $installFiles) {
+        $target = Join-Path $portableStage $file
+        New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $payload $file) -Destination $target
+    }
+    foreach ($mode in 'portable', 'test') {
+        $title = (Get-Culture).TextInfo.ToTitleCase($mode)
+        $launcher = '@echo off' + "`r`n" + 'start "" "%~dp0host\bin\DynamicDesktop.exe" --' + $mode + "`r`n"
+        [IO.File]::WriteAllText((Join-Path $portableStage "DynamicDesktop $title.cmd"), $launcher, [Text.Encoding]::ASCII)
+    }
+    $portableOutput = Join-Path $dist "DynamicDesktop-$version-win-x64-Portable.zip"
+    $portableTemp = Join-Path $payload 'portable.zip'
+    [IO.Compression.ZipFile]::CreateFromDirectory($portableStage, $portableTemp)
+    Move-Item -LiteralPath $portableTemp -Destination $portableOutput -Force
+    Write-Host "Portable: $portableOutput"
+    return
+}
 $utf8 = New-Object Text.UTF8Encoding($true)
 $fileLines = @()
 $deleteLines = @()
@@ -94,8 +137,8 @@ $fileList = Join-Path $payload 'files.nsh'
 $deleteList = Join-Path $payload 'delete.nsh'
 [IO.File]::WriteAllLines($fileList, [string[]]$fileLines, $utf8)
 [IO.File]::WriteAllLines($deleteList, [string[]]$deleteLines, $utf8)
-$output = Join-Path $dist "Deskland-Preview-$version-win-x64-Setup.exe"
-& $NsisCompiler /V2 "/DVERSION=$version" "/DPAYLOAD=$payload" "/DOUTPUT=$output" "/DBOOTSTRAPPER=$WebView2Bootstrapper" "/DFILE_LIST=$fileList" "/DDELETE_LIST=$deleteList" (Join-Path $PSScriptRoot 'installer.nsi')
+$output = Join-Path $dist "DynamicDesktop-$version-win-x64-Setup.exe"
+& $NsisCompiler /V2 "/DVERSION=$version" "/DPAYLOAD=$payload" "/DOUTPUT=$output" "/DFILE_LIST=$fileList" "/DDELETE_LIST=$deleteList" (Join-Path $PSScriptRoot 'installer.nsi')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
 $hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash
 [IO.File]::WriteAllText(($output + '.sha256'), "$hash  $([IO.Path]::GetFileName($output))`r`n", (New-Object Text.UTF8Encoding($false)))

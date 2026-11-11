@@ -1,4 +1,4 @@
-// 沙滩的五款椰子树，树根更靠沙地内侧；素材和投影仅在初始化时合成。
+// Five beach palm variants; roots sit inland. Build assets and shadows once.
 const BEACH_PALM_STYLES = [
   {file: 'beach-coconut-palm-v2.png', foot: [.454, .98], crown: [9, -84], radius: 80},
   {file: 'beach-coconut-palm-curved.png', foot: [.470, .98], crown: [18, -80], radius: 84, faceSea: true},
@@ -16,16 +16,24 @@ uniform vec2 uRes;
 uniform vec4 uPalm;
 uniform float uPalmMirror;
 uniform float uTime;
+uniform float uShadowPass;
+uniform vec2 uLightDirection;
+uniform float uShadowLength;
 out vec2 palmUV;
 void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   vec2 local = corner * vec2(224.0, 256.0) - vec2(112.0, 162.0);
   local.x *= uPalmMirror;
+  if (uShadowPass > .5) {
+    vec2 d = normalize(uLightDirection);
+    local.y *= uShadowLength;
+    local = vec2(local.x * d.y + local.y * d.x, -local.x * d.x + local.y * d.y);
+  }
   float a = sin(uTime * .65 + uPalm.w * 2.0) * .008;
   local = mat2(cos(a), sin(a), -sin(a), cos(a)) * local;
   vec2 p = uPalm.xy + local * uPalm.z;
   gl_Position = vec4(p.x / uRes.x * 2.0 - 1.0, 1.0 - p.y / uRes.y * 2.0, 0.0, 1.0);
-  palmUV = vec2((corner.x + uPalm.w) / ${BEACH_PALM_STYLES.length}.0, corner.y);
+  palmUV = vec2((corner.x + uPalm.w) / ${BEACH_PALM_STYLES.length}.0, (corner.y + uShadowPass) * .5);
 }`;
 const BEACH_PALM_FS = `
 uniform sampler2D uPalmAtlas;
@@ -35,24 +43,25 @@ void main() {
   vec4 tree = texture(uPalmAtlas, palmUV);
   if (tree.a < .002) discard;
   vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
-  // 飞鸟始终从树冠上方经过。
+  // Birds always pass in front of the canopy.
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uBirdN) break;
     vec4 b = uBird[i];vec2 q = rot(-b.z) * (p - b.xy);
     if (dot(q, q) < 400.0) {vec3 bird = gullSD(q, b.w);if (min(bird.x, bird.y) < .6) discard;}
   }
   float alpha = tree.a * uPalmOpacity;
-  o = vec4(tree.rgb * alpha, alpha);
+  vec3 color = mix(tree.rgb, tree.rgb * vec3(.27,.38,.58), uNight * .82);
+  o = vec4(color * alpha, alpha);
 }`;
 
 function makeMaldivesPalmAtlas() {
-  const atlas = document.createElement('canvas');atlas.width = 224 * BEACH_PALM_STYLES.length * 2;atlas.height = 256 * 2;
+  const atlas = document.createElement('canvas');atlas.width = 224 * BEACH_PALM_STYLES.length * 2;atlas.height = 256 * 4;
   const ctx = atlas.getContext('2d');ctx.scale(2, 2);
   for (let variant = 0; variant < BEACH_PALM_STYLES.length; variant++) {
     const image = beachPalmImages[variant], style = BEACH_PALM_STYLES[variant];
     const width = style.width || 168, height = style.height || 156;
     const footX = style.foot[0] * width, footY = style.foot[1] * height;
-    // 每种轮廓分别投影；树根位置不随素材的透明留白变化。
+    // Project each silhouette separately; transparent padding does not move the root.
     const shadow = document.createElement('canvas');shadow.width = 448;shadow.height = 512;
     const shadowCtx = shadow.getContext('2d');shadowCtx.scale(2, 2);
     shadowCtx.translate(112, 162);shadowCtx.transform(.85, .08, 0, -.50, 0, 0);
@@ -60,13 +69,13 @@ function makeMaldivesPalmAtlas() {
     shadowCtx.setTransform(1, 0, 0, 1, 0, 0);shadowCtx.globalCompositeOperation = 'source-in';
     shadowCtx.fillStyle = '#3c6257';shadowCtx.fillRect(0, 0, shadow.width, shadow.height);
     ctx.save();ctx.translate(variant * 224, 0);
-    ctx.save();ctx.globalAlpha = .20;ctx.filter = 'blur(1.2px)';ctx.drawImage(shadow, 0, 0, 224, 256);ctx.restore();
-    ctx.save();ctx.globalAlpha = .17;ctx.fillStyle = '#516051';
+    ctx.save();ctx.translate(0,256);ctx.globalAlpha = .20;ctx.filter = 'blur(1.2px)';ctx.drawImage(shadow, 0, 0, 224, 256);ctx.restore();
+    ctx.save();ctx.translate(0,256);ctx.globalAlpha = .17;ctx.fillStyle = '#516051';
     ctx.beginPath();ctx.ellipse(112, 162, 4.4, 1.6, 0, 0, Math.PI * 2);ctx.fill();ctx.restore();
     ctx.save();ctx.translate(112, 162);ctx.filter = 'saturate(.94) brightness(.98)';
     ctx.drawImage(image, -footX, -footY, width, height);ctx.restore();ctx.restore();
   }
-  // 一次性压低黄色与饱和度，保持偏灰的深绿色；不增加每帧的调色开销。
+  // Reduce yellow and saturation once to keep a muted green without per-frame color work.
   const pixels = ctx.getImageData(0, 0, atlas.width, atlas.height), rgba = pixels.data;
   for (let i = 0; i < rgba.length; i += 4) {
     if (!rgba[i + 3]) continue;
@@ -98,10 +107,10 @@ function chooseMaldivesPalms() {
   for (let i = order.length - 1; i > 0; i--) {const j = Math.floor(random() * (i + 1));[order[i], order[j]] = [order[j], order[i]];}
   const styleRandom = mulberry32((seed ^ 0x6ac309) >>> 0);
   while (order.length < 10) order.push(Math.floor(styleRandom() * BEACH_PALM_STYLES.length));
-  // 在整片合适的沙地中均匀抽选，不偏向同一条等距岸线；固定种子避免每帧跳动。
+  // Sample suitable sand uniformly; use a fixed seed to prevent frame-to-frame jumps.
   for (const variant of order) {
     const style = BEACH_PALM_STYLES[variant], spacing = 60 + random() * 35;let selected = null;
-    // 只尝试正常尺寸；沙地或图标间距不足时省略这棵树，不缩成迷你树。
+    // Keep normal size; omit a palm when sand or icon clearance is insufficient.
     for (const baseScale of [.62]) {
       const scale = baseScale * .80 * (style.size || 1);
       const radius = style.radius * scale, offsetX = random() * 13, offsetY = random() * 13;let best = null, candidates = 0;
@@ -109,7 +118,7 @@ function chooseMaldivesPalms() {
         const shore = sampleArr(FB.s, x, y);
         if (shore > -25 || shore < -58) continue;
         if (chosen.some(q => Math.hypot(q.x - x, q.y - y) < spacing)) continue;
-        // 弯干款以根部为轴翻转，弯曲方向跟随岸线朝向海水；不旋转树的竖直视角。
+        // Mirror curved trunks around the root to face the sea without rotating the tree.
         const seaX = style.faceSea ? sampleArr(FB.s, x + 8, y) - sampleArr(FB.s, x - 8, y) : 0;
         const mirror = style.faceSea && seaX * style.crown[0] < 0 ? -1 : 1;
         const crown = {x: x + style.crown[0] * scale * mirror, y: y + style.crown[1] * scale};
@@ -145,14 +154,24 @@ function drawMaldivesPalms(now, pass, configurePass, context) {
   configurePass(now, pass, context);
   gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D, scene.atlas);gl.uniform1i(pass.U.uPalmAtlas, 6);
   gl.enable(gl.BLEND);gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  const sun = DynamicDesktopEnvironment.light(P.lighting);
+  gl.uniform2f(pass.U.uLightDirection, sun.x, sun.y);
+  gl.uniform1f(pass.U.uShadowLength, P.shadowSize * sun.shadowLength);
   for (const palm of scene.palms) {
     const onSand = Math.max(0, Math.min(1, -curS(palm.x, palm.y) / 4));
     const target = palm.retiring ? 0 : onSand;
     palm.opacity += (target - palm.opacity) * (1 - Math.exp(-dt * 4));
-    if (palm.opacity < .003) continue;
-    gl.uniform4f(pass.U.uPalm, palm.x, palm.y, palm.scale, palm.variant);gl.uniform1f(pass.U.uPalmOpacity, palm.opacity);
-    gl.uniform1f(pass.U.uPalmMirror, palm.mirror);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+  for (const shadowPass of [1, 0]) {
+    const shadowOpacity = shadowPass ? P.sceneShadows * (1 - sun.night) : 1;
+    if (shadowOpacity <= 0) continue;
+    gl.uniform1f(pass.U.uShadowPass, shadowPass);
+    for (const palm of scene.palms) {
+      if (palm.opacity < .003) continue;
+      gl.uniform4f(pass.U.uPalm, palm.x, palm.y, palm.scale, palm.variant);gl.uniform1f(pass.U.uPalmOpacity, palm.opacity * shadowOpacity);
+      gl.uniform1f(pass.U.uPalmMirror, palm.mirror);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
   }
   scene.palms = scene.palms.filter(p => !p.retiring || p.opacity > .003);
   gl.disable(gl.BLEND);
