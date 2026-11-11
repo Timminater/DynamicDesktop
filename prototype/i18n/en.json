@@ -95,6 +95,16 @@
     "trayPause": "Pause animation",
     "trayReload": "Reload",
     "trayAutostart": "Start with Windows",
+    "trayCheckUpdate": "Check for updates",
+    "trayInstallUpdate": "Install update {version}",
+    "trayAutoUpdate": "Install updates automatically",
+    "updateAvailable": "DynamicDesktop {version} is available.",
+    "updateInstalled": "DynamicDesktop has been updated to {version}.",
+    "updateCurrent": "DynamicDesktop {version} is up to date.",
+    "updateNoPublicRelease": "GitHub has no public release of DynamicDesktop available yet.",
+    "updateCheckFailed": "Could not check for updates. Try again later.",
+    "updateDownloadFailed": "Could not download or verify the update. Try again later.",
+    "updateInstallFailed": "Could not install the update. Try again later.",
     "trayExit": "Exit (restore wallpaper)",
     "welcomeTitle": "DynamicDesktop is running",
     "welcomeBody": "Click the beach icon in the system tray{hotkey} to open the menu.\nCan't see it? Click ^ on the right side of the taskbar.",
@@ -271,104 +281,6 @@
         }
       }
     },
-    "sky": {
-      "name": "Sky",
-      "desc": "Puffy white clouds gather around your icons. Choose daylight, night or automatic lighting.",
-      "groups": [
-        "Time of day",
-        "Around icons",
-        "Clouds",
-        "Details"
-      ],
-      "params": {
-        "time": {
-          "label": "Time of day",
-          "hint": "Follow the clock: dawn at 6:00, day at 7:00, dusk at 17:30, night at 19:00",
-          "options": [
-            "Auto",
-            "Day",
-            "Dusk",
-            "Night"
-          ]
-        },
-        "sigma": {
-          "label": "Cloud size",
-          "hint": "How far the clouds spread out from your icons"
-        },
-        "cover": {
-          "label": "Clouds in the sky",
-          "hint": "How many clouds drift across the open sky"
-        },
-        "flow": {
-          "label": "Drift speed",
-          "hint": "How fast the clouds drift and their puffs change"
-        },
-        "birds": {
-          "label": "Birds",
-          "hint": "They don't fly at night",
-          "unit": ""
-        },
-        "plane": {
-          "label": "Plane",
-          "hint": "A little plane trails across the top of the screen",
-          "options": [
-            "Never",
-            "Now and then",
-            "Often"
-          ]
-        },
-        "moon": {
-          "label": "Moon",
-          "hint": "The moon and moonlight at night",
-          "options": [
-            "Off",
-            "On"
-          ]
-        },
-        "stars": {
-          "label": "Star size",
-          "hint": "Stars at night; turn it up for bright stars with cross-shaped sparkles"
-        }
-      }
-    },
-    "ocean": {
-      "name": "Ocean",
-      "desc": "Looking down on a blue ocean — your icons hide in white clouds whose shadows fall on the sea",
-      "groups": [
-        "Around icons",
-        "Clouds",
-        "Details"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Cloud size",
-          "hint": "How far the clouds around your icons spread out"
-        },
-        "cover": {
-          "label": "Clouds over the sea",
-          "hint": "How many clouds drift over the open sea"
-        },
-        "flow": {
-          "label": "Drift speed",
-          "hint": "How fast the clouds drift and their puffs change"
-        },
-        "boats": {
-          "label": "Sailboats",
-          "hint": "White and gray sailboats sailing slowly across open water",
-          "unit": ""
-        },
-        "yachts": {
-          "label": "Yachts",
-          "hint": "White and gray yachts with dark gray windows, pale gray seats and foamy wakes",
-          "unit": ""
-        },
-        "birds": {
-          "label": "Seabirds",
-          "hint": "White gulls gliding and circling over the sea",
-          "unit": ""
-        }
-      }
-    },
     "meadow": {
       "name": "Meadow",
       "desc": "A pen-and-wash meadow where your icons hide in white clouds that cast dark green shadows",
@@ -410,83 +322,19 @@
     },
     "forest": {
       "name": "Forest",
-      "desc": "Your icons sit in a clearing ringed by gouache cartoon trees swaying in the breeze",
+      "desc": "Painted treetops surround clearings around your icons, with green and pink palettes.",
       "groups": [
-        "Around icons",
-        "Trees",
-        "Details"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Clearing size",
-          "hint": "How big the clearing around your icons is, and how far away the trees stand"
-        },
-        "wind": {
-          "label": "Wind",
-          "hint": "How much the treetops sway; 0 means no wind"
-        },
-        "birds": {
-          "label": "Birds",
-          "hint": "Mostly perched on treetops, now and then flying to a nearby tree — they stay in the woods",
-          "unit": ""
-        }
-      }
-    },
-    "pinkforest": {
-      "name": "Pink Forest",
-      "desc": "A watercolor forest: translucent pink treetops on fine ink trunks",
-      "groups": [
-        "Around icons",
-        "Trees",
-        "Details"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Clearing size",
-          "hint": "How big the clearing around your icons is, and how far away the trees stand"
-        },
-        "wind": {
-          "label": "Wind",
-          "hint": "How much the treetops sway; 0 means no wind"
-        },
-        "birds": {
-          "label": "Birds",
-          "hint": "Little ink birds, mostly perched on treetops, now and then flying to a nearby tree",
-          "unit": ""
-        }
-      }
+        "Landscape",
+        "Lighting"
+      ]
     },
     "map": {
       "name": "Hand-drawn City",
-      "desc": "A bird's-eye map of an old town: rows of ink-drawn houses line the streets, and your icons sit in the squares",
+      "desc": "A hand-drawn city with squares around your icons and classic or colourful streets.",
       "groups": [
-        "Around icons",
-        "Town"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Square size",
-          "hint": "How big the open squares around your icons are"
-        },
-        "canals": {
-          "label": "Canals",
-          "hint": "How many canals cross the town, with little boats drifting along",
-          "unit": ""
-        }
-      }
-    },
-    "citymap": {
-      "name": "Colorful City",
-      "desc": "An illustrated city map with red roofs and yellow, pink and blue walls; your icons sit in the squares",
-      "groups": [
-        "Around icons"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Square size",
-          "hint": "How big the open squares around your icons are"
-        }
-      }
+        "Landscape",
+        "Lighting"
+      ]
     },
     "worldmap": {
       "name": "Old Map",

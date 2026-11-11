@@ -19,9 +19,13 @@ const scenes = {
   nauticalmap: { kind: 'chart', background: ['#a8c8c3', '#c7d4be'], water: '#e2ce9f', shore: '#827658', detail: '#4f645c' },
   lotus: { kind: 'pond', background: ['#234d46', '#427d65'], water: '#569980', shore: '#789f64', detail: '#e4a8b4' }
 };
-const sceneId = query.get('theme');
-const style = Object.hasOwn(scenes, sceneId) ? scenes[sceneId] : scenes.lake;
-const DEFAULTS = { adaptive: 1, spread: 80, detail: 0.68, speed: 1, lighting: 0, seed: 42 };
+const requestedScene = query.get('theme');
+const baseScene = requestedScene === 'pinkforest' ? 'forest' : requestedScene === 'citymap' ? 'map' : requestedScene;
+const cloudScene = baseScene === 'sky' || baseScene === 'ocean';
+let sceneId = Object.hasOwn(scenes, requestedScene) ? requestedScene : 'lake';
+let style = scenes[sceneId];
+const DEFAULTS = { adaptive: 1, spread: cloudScene ? 95 : 80, detail: cloudScene ? .65 : .68, speed: 1, lighting: 0, seed: 42,
+  palette: requestedScene === 'pinkforest' ? 1 : 0, variant: requestedScene === 'citymap' ? 1 : 0 };
 const P = { ...DEFAULTS };
 let W = innerWidth, H = innerHeight, icons = [];
 let terrain, previous, movers = [], routes = [], anchors = [];
@@ -401,15 +405,23 @@ function resize() {
 }
 
 function applySettings(values) {
-  const limits = { adaptive: [0, 1], spread: [40, 160], detail: [0, 1], speed: [0, 3], lighting: [0, 2], seed: [0, Number.MAX_SAFE_INTEGER] };
+  // The cloud scenes share the sigma control with the layered sky renderer.
+  if (cloudScene && Number.isFinite(values.sigma)) {
+    values = { ...values, spread: values.sigma };
+  }
+  const limits = { adaptive: [0, 1], spread: cloudScene ? [35, 180] : [40, 160], detail: [0, 1], speed: [0, 3], lighting: [0, 2], seed: [0, Number.MAX_SAFE_INTEGER], palette: [0, 1], variant: [0, 1] };
   let rebuild = false;
   for (const [key, [lo, hi]] of Object.entries(limits)) {
     if (!Number.isFinite(values[key])) continue;
-    const value = Math.min(hi, Math.max(lo, values[key]));
+    let value = Math.min(hi, Math.max(lo, values[key]));
+    if (key === 'palette' || key === 'variant') value = Math.round(value);
     if (value === P[key]) continue;
     P[key] = value;
     rebuild ||= key !== 'speed' && key !== 'lighting';
   }
+  if (baseScene === 'forest') sceneId = P.palette ? 'pinkforest' : 'forest';
+  else if (baseScene === 'map') sceneId = P.variant ? 'citymap' : 'map';
+  style = scenes[sceneId];
   if (rebuild) commit();
 }
 

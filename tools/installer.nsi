@@ -6,6 +6,8 @@ Unicode true
 !include "FileFunc.nsh"
 !include "StrFunc.nsh"
 ${UnStrStr}
+Var UpdateMode
+Var AppStopped
 Name "DynamicDesktop"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\DynamicDesktop"
@@ -48,19 +50,47 @@ LangString RuntimeFailed ${LANG_ENGLISH} "Microsoft Edge WebView2 Runtime is req
 LangString RuntimeFailed ${LANG_DUTCH} "Microsoft Edge WebView2 Runtime is vereist. Installeer de runtime apart en probeer het opnieuw."
 
 Function .onInit
+  StrCpy $UpdateMode 0
+  StrCpy $AppStopped 0
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/UPDATE" $1
+  ${IfNot} ${Errors}
+    StrCpy $UpdateMode 1
+  ${EndIf}
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "$(NeedX64)"
+    MessageBox MB_ICONSTOP "$(NeedX64)" /SD IDOK
     SetErrorLevel 1
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_ICONSTOP "$(NeedX64)"
+    MessageBox MB_ICONSTOP "$(NeedX64)" /SD IDOK
     SetErrorLevel 1
     Abort
   ${EndIf}
   SetShellVarContext current
   SetRegView 64
+  IfSilent languageDone
   !insertmacro MUI_LANGDLL_DISPLAY
+  languageDone:
+FunctionEnd
+
+Function .onInstSuccess
+  IfSilent 0 done
+  ${If} $UpdateMode == 1
+    Exec '"$INSTDIR\host\bin\DynamicDesktop.exe" --updated'
+  ${EndIf}
+  done:
+FunctionEnd
+
+Function .onInstFailed
+  IfSilent 0 done
+  ${If} $UpdateMode == 1
+  ${AndIf} $AppStopped == 1
+    IfFileExists "$INSTDIR\host\bin\DynamicDesktop.exe" 0 done
+    Exec '"$INSTDIR\host\bin\DynamicDesktop.exe" --update-failed'
+  ${EndIf}
+  done:
 FunctionEnd
 
 Function CheckRuntime
@@ -81,17 +111,18 @@ Section "$(AppFiles)" SecApp
   Call CheckRuntime
   ${If} $0 == ""
   ${OrIf} $0 == "0.0.0.0"
-    MessageBox MB_ICONSTOP "$(RuntimeFailed)"
+    MessageBox MB_ICONSTOP "$(RuntimeFailed)" /SD IDOK
     SetErrorLevel 2
     Abort
   ${EndIf}
   IfFileExists "$INSTDIR\host\bin\DynamicDesktop.exe" 0 closed
   ExecWait '"$INSTDIR\host\bin\DynamicDesktop.exe" --exit-installed' $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "$(CloseFailed)"
+    MessageBox MB_ICONSTOP "$(CloseFailed)" /SD IDOK
     SetErrorLevel 3
     Abort
   ${EndIf}
+  StrCpy $AppStopped 1
   closed:
   !include "${FILE_LIST}"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -120,7 +151,7 @@ Section "Uninstall"
   IfFileExists "$INSTDIR\host\bin\DynamicDesktop.exe" 0 unclosed
   ExecWait '"$INSTDIR\host\bin\DynamicDesktop.exe" --exit-installed' $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "$(CloseFailed)"
+    MessageBox MB_ICONSTOP "$(CloseFailed)" /SD IDOK
     SetErrorLevel 3
     Abort
   ${EndIf}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DynamicDesktop · UboatWorx</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c3551; }
+  #art, #icons { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #icons { pointer-events: none; }
+  .icon { position: absolute; display: grid; box-sizing: border-box; justify-items: center; align-content: start; gap: 6px;
+    padding-top: 8px; border: 0; background: transparent; }
+  .icon i, .icon b { display: block; pointer-events: none; }
+  .icon i { width: 39px; height: 39px; border-radius: 7px; background: #d9eaf2a8; }
+  .icon b { width: 43px; height: 5px; border-radius: 3px; background: #edf7fce0; }
+  .demo .icon { pointer-events: auto; touch-action: none; cursor: grab; }
+  .demo .icon:active { cursor: grabbing; }
+  .demo .folder { position: relative; width: 39px; height: 28px; margin: 7px 0 4px; border-radius: 4px;
+    background: linear-gradient(#ffe6a5, #ecc06b); box-shadow: 0 1px 2px #061c36a0; }
+  .demo .folder::before { content: ""; position: absolute; left: 1px; top: -5px; width: 17px; height: 6px; border-radius: 3px 3px 0 0; background: #e9ae51; }
+  .demo .file { width: 29px; height: 37px; border-radius: 2px; clip-path: polygon(0 0, 67% 0, 100% 26%, 100% 100%, 0 100%);
+    background: repeating-linear-gradient(#8eacbd 0 2px, #eef5f8 2px 7px) center 16px / 18px 14px no-repeat, #eef5f8; }
+  #demo { position: fixed; top: 14px; right: 16px; display: flex; align-items: center; flex-wrap: wrap; justify-content: end;
+    gap: 8px; max-width: min(100% - 32px, 795px); color: #dcebf4; font: 13px system-ui, sans-serif; }
+  #demo[hidden] { display: none; }
+  #demo button, #demo a, #demo select { padding: 7px 10px; border: 1px solid #afcbd94a; border-radius: 8px; color: inherit; font: inherit;
+    text-decoration: none; background: #082b43a8; cursor: pointer; }
+  #demo select { color-scheme: dark; }
+  #demo button:hover, #demo a:hover { background: #1b5067; }
+  #demo #reefDive, #demo #wakePass { background: #155565; border-color: #6ad0d88a; }
+  #demo #reefDive:hover, #demo #wakePass:hover { background: #1c6979; }
+  #demoHint { flex-basis: 100%; text-align: right; color: #b5cedd; }
+</style>
+</head>
+<body>
+<canvas id="art" aria-label="Underwater wallpaper"></canvas>
+<div id="icons"></div>
+<nav id="demo" hidden>
+  <select id="demoLandscape" aria-label="Landscape">
+    <option value="0">Kelp</option>
+    <option value="1">Reef arches</option>
+    <option value="2">Silt windows</option>
+  </select>
+  <select id="demoLighting" aria-label="Lighting">
+    <option value="0">Day</option>
+    <option value="1">Night</option>
+    <option value="2">Automatic</option>
+  </select>
+  <span id="modelName" role="status"></span>
+  <button type="button" id="reefDive"></button>
+  <button type="button" id="wakePass"></button>
+  <button type="button" id="nextVessel"></button>
+  <button type="button" id="resetIcons"></button>
+  <a id="openSettings" href="settings.html?theme=kelp"></a>
+  <span id="demoHint"></span>
+</nav>
+<script src="environment.js"></script>
+<script src="kelp.js"></script>
+<script src="community-effects.js"></script>
+<script src="share.js"></script>
+</body>
+</html>

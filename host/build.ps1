@@ -59,7 +59,7 @@ using System.Reflection;
     /out:"$bin\DynamicDesktop.exe" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
     /r:"$lib\Microsoft.Web.WebView2.Core.dll" /r:"$lib\Microsoft.Web.WebView2.WinForms.dll" `
-    "$root\DesktopHost.cs" "$root\Themes.cs" "$versionSource"
+    "$root\DesktopHost.cs" "$root\Themes.cs" "$root\ReleaseUpdates.cs" "$versionSource"
 if ($LASTEXITCODE -ne 0) { throw 'DynamicDesktop compilation failed.' }
 foreach ($assembly in $assemblies) { Copy-Item -LiteralPath (Join-Path $lib $assembly.Name) -Destination $bin -Force }
 Copy-Item -LiteralPath (Join-Path $root 'DynamicDesktop.ico') -Destination (Join-Path $bin 'DynamicDesktop.ico') -Force

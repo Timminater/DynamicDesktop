@@ -47,12 +47,14 @@ static class Program
         if (args.Length > 0 && args[0] == "--exit-installed") { Environment.ExitCode = InstallProfile.StopInstalled(); return; }
         // Preview never migrates or shares the development edition's settings.
         bool fromAutostart = Array.IndexOf(args, "--autostart") >= 0;
+        bool afterUpdate = Array.IndexOf(args, "--updated") >= 0;
+        bool failedUpdate = Array.IndexOf(args, "--update-failed") >= 0;
         if (fromAutostart) AutoStartCheck.MarkLaunched();  // Record the launch even if another instance already runs.
         bool created;
         var mutex = new Mutex(true, "DynamicDesktopHost_Singleton" + InstallProfile.Suffix, out created);
         if (!created)
         {
-            if (!fromAutostart) Signal(SettingsEventName); // A manual second launch opens settings.
+            if (!fromAutostart && !afterUpdate && !failedUpdate) Signal(SettingsEventName); // A manual second launch opens settings.
             return;
         }
         // Desktop icon coordinates and monitor bounds use physical pixels.
@@ -69,16 +71,14 @@ static class Program
         // --defview uses the icon layer (experimental and observed not to draw);
         // --legacy uses WorkerW, which Explorer can destroy on wallpaper changes.
         string attach = "progman";
-        bool autostart = false;                           // --autostart starts without opening settings.
         foreach (string a in args)
         {
             if (a == "--legacy") attach = "legacy";
             else if (a == "--defview") attach = "defview";
-            else if (a == "--autostart") autostart = true;
             else if (!a.StartsWith("--")) pageDir = a;
         }
         WallpaperForm.AttachMode = attach;
-        Application.Run(new HostContext(pageDir, !autostart));
+        Application.Run(new HostContext(pageDir, !fromAutostart && !afterUpdate && !failedUpdate, afterUpdate, failedUpdate));
         GC.KeepAlive(mutex);
     }
 }
@@ -174,6 +174,7 @@ static class Settings
     public static string Lang = "auto";                // System language or a supported language code.
     public static Dictionary<string, object> Environment = new Dictionary<string, object>();
     public static bool MousePassthrough = true;
+    public static bool AutoInstallUpdates = true;
     public static Dictionary<string, Dictionary<string, object>> Params = new Dictionary<string, Dictionary<string, object>>();
 
     public static void Load()
@@ -191,6 +192,7 @@ static class Settings
             if (root.TryGetValue("lang", out v) && v is string) Lang = I18n.Normalize((string)v);
             if (root.TryGetValue("environment", out v) && v is Dictionary<string, object>) Environment = (Dictionary<string, object>)v;
             if (root.TryGetValue("mousePassthrough", out v) && v is bool) MousePassthrough = (bool)v;
+            if (root.TryGetValue("autoInstallUpdates", out v) && v is bool) AutoInstallUpdates = (bool)v;
             if (root.TryGetValue("params", out v) && v is Dictionary<string, object>)
                 foreach (var kv in (Dictionary<string, object>)v)
                 {
@@ -208,7 +210,8 @@ static class Settings
         try
         {
             Directory.CreateDirectory(Log.DataDir);
-            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "lang", Lang, "params", Params, "environment", Environment, "mousePassthrough", MousePassthrough)), new UTF8Encoding(false));
+            File.WriteAllText(FilePath, Json.Stringify(Json.Obj("version", 1, "theme", Theme, "lang", Lang, "params", Params,
+                "environment", Environment, "mousePassthrough", MousePassthrough, "autoInstallUpdates", AutoInstallUpdates)), new UTF8Encoding(false));
         }
         catch (Exception ex) { Log.Write("Could not save settings: " + ex.Message); }
     }
@@ -296,6 +299,15 @@ class HostContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly MenuItem pauseItem, autoStartItem, settingsItem, reloadItem, exitItem;
     readonly MenuItem passthroughItem;
+    readonly MenuItem updateCheckItem, updateInstallItem, autoUpdateItem;
+    readonly string updateInstallDirectory;
+    readonly object updateLock = new object();
+    static readonly Version RunningVersion = typeof(HostContext).Assembly.GetName().Version;
+    DateTime nextUpdateCheck = DateTime.UtcNow.AddSeconds(20), nextUpdateDownload, nextUpdateInstall;
+    Action updateCompletion;
+    ReleaseUpdate availableUpdate;
+    string updateInstaller;
+    bool updateBusy, updateInstallRequested, updateInstalling;
     readonly System.Windows.Forms.Timer watch;
     readonly EventWaitHandle exitEvent, menuEvent, settingsEvent;
     readonly HotkeyWindow hotkey = new HotkeyWindow();
@@ -311,13 +323,15 @@ class HostContext : ApplicationContext
     bool manualPause, exiting;
     string autoStartSw;                                 // null: healthy; otherwise the suspected security product.
 
-    public HostContext(string pageDir, bool showSettings)
+    public HostContext(string pageDir, bool showSettings, bool afterUpdate, bool failedUpdate)
     {
         this.pageDir = pageDir;
         Log.Write("Starting with page directory " + pageDir + (showSettings ? "" : " (autostart)"));
         if (showSettings && !InstallProfile.NoAutostart) autoStartSw = AutoStartCheck.Detect(IsAutoStart());
         Settings.Load();
+        if (Themes.Migrate(pageDir)) Settings.Save();
         I18n.Load(pageDir, Settings.Lang);
+        updateInstallDirectory = RegisteredInstallDirectory();
         mouseHook = new DesktopMouseHook(delegate(int x, int y) {
             foreach (WallpaperForm f in forms.ToArray()) f.Ripple(x, y);
         });
@@ -363,6 +377,19 @@ class HostContext : ApplicationContext
             SaveSoon();
         });
         passthroughItem.Checked = Settings.MousePassthrough;
+        updateCheckItem = new MenuItem(I18n.T("trayCheckUpdate"), delegate { CheckForUpdate(true); });
+        updateInstallItem = new MenuItem(I18n.T("trayInstallUpdate"), delegate
+        {
+            updateInstallRequested = true;
+            nextUpdateDownload = nextUpdateInstall = DateTime.MinValue;
+        });
+        autoUpdateItem = new MenuItem(I18n.T("trayAutoUpdate"), delegate
+        {
+            Settings.AutoInstallUpdates = !Settings.AutoInstallUpdates;
+            autoUpdateItem.Checked = Settings.AutoInstallUpdates;
+            SaveSoon();
+        });
+        RefreshUpdateMenu();
 
         tray = new NotifyIcon();
         tray.Icon = AppIcon.Create();
@@ -373,6 +400,9 @@ class HostContext : ApplicationContext
             passthroughItem,
             reloadItem = new MenuItem(I18n.T("trayReload"), delegate { foreach (WallpaperForm f in forms) f.Reload(); }),
             autoStartItem,
+            updateCheckItem,
+            updateInstallItem,
+            autoUpdateItem,
             new MenuItem("-"),
             exitItem = new MenuItem(I18n.T("trayExit"), delegate { Exit(); }),
         });
@@ -380,6 +410,12 @@ class HostContext : ApplicationContext
         tray.DoubleClick += delegate { OpenSettings(); };
         tray.Visible = true;
         ShowWelcomeOnce(hotkeyOk);
+        if (afterUpdate) ShowUpdateNotice("updateInstalled", RunningVersion, ToolTipIcon.Info);
+        if (failedUpdate)
+        {
+            nextUpdateCheck = DateTime.UtcNow.AddHours(6);
+            ShowUpdateNotice("updateInstallFailed", null, ToolTipIcon.Warning);
+        }
 
         watch = new System.Windows.Forms.Timer();
         watch.Interval = 500;
@@ -397,6 +433,9 @@ class HostContext : ApplicationContext
         passthroughItem.Text = I18n.T("trayMousePassthrough");
         reloadItem.Text = I18n.T("trayReload");
         autoStartItem.Text = I18n.T("trayAutostart");
+        updateCheckItem.Text = I18n.T("trayCheckUpdate");
+        autoUpdateItem.Text = I18n.T("trayAutoUpdate");
+        RefreshUpdateMenu();
         exitItem.Text = I18n.T("trayExit");
     }
 
@@ -455,10 +494,13 @@ class HostContext : ApplicationContext
             {
                 string theme = m["theme"] as string, key = m["key"] as string;
                 if (theme == null || key == null) return;
+                string oldPage = key == "variant" && theme == Settings.Theme ? Themes.PageFor(pageDir, theme) : null;
                 Settings.For(theme)[key] = m["value"];
                 if (theme == Settings.Theme)
                 {
-                    Broadcast(Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"]))));
+                    string newPage = oldPage == null ? null : Themes.PageFor(pageDir, theme);
+                    if (newPage != null && newPage != oldPage) foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(newPage);
+                    else Broadcast(Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"]))));
                     if (key == "iconShadows") foreach (WallpaperForm f in forms) f.RefreshIconMasks();
                 }
                 SaveSoon();
@@ -468,10 +510,13 @@ class HostContext : ApplicationContext
             {
                 string theme = m["theme"] as string;
                 if (theme == null) return;
+                string oldPage = theme == Settings.Theme ? Themes.PageFor(pageDir, theme) : null;
                 Settings.Params.Remove(theme);
                 if (theme == Settings.Theme)
                 {
-                    Broadcast("{\"t\":\"reset\"}");
+                    string newPage = Themes.PageFor(pageDir, theme);
+                    if (newPage != null && newPage != oldPage) foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(newPage);
+                    else Broadcast("{\"t\":\"reset\"}");
                     foreach (WallpaperForm f in forms) f.RefreshIconMasks();
                 }
                 SaveSoon();
@@ -828,6 +873,210 @@ class HostContext : ApplicationContext
         nextStart = DateTime.Now.AddSeconds(1);
     }
 
+    static string RegisteredInstallDirectory()
+    {
+        if (InstallProfile.Isolated) return null;
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\DynamicDesktop\Installer"))
+            {
+                var directory = key == null ? null : key.GetValue("InstallDir") as string;
+                if (String.IsNullOrEmpty(directory)) return null;
+                directory = Path.GetFullPath(directory);
+                string expected = Path.Combine(directory, @"host\bin\DynamicDesktop.exe");
+                return String.Equals(expected, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase) ? directory : null;
+            }
+        }
+        catch (Exception ex) { Log.Write("Could not locate the registered installation for updates: " + ex.Message); return null; }
+    }
+
+    void RefreshUpdateMenu()
+    {
+        updateCheckItem.Visible = autoUpdateItem.Visible = updateInstallDirectory != null;
+        updateCheckItem.Enabled = !updateBusy && !updateInstalling;
+        updateInstallItem.Visible = updateInstallDirectory != null && availableUpdate != null;
+        updateInstallItem.Enabled = !updateBusy && !updateInstalling;
+        if (availableUpdate != null) updateInstallItem.Text = I18n.T("trayInstallUpdate", "version", availableUpdate.Version.ToString(3));
+        autoUpdateItem.Enabled = !updateInstalling;
+        autoUpdateItem.Checked = Settings.AutoInstallUpdates;
+    }
+
+    // All I/O stays off the tray thread. Watch applies the result on that thread.
+    void RunUpdateWork(Func<Action> work, Action<Exception> failed)
+    {
+        updateBusy = true;
+        RefreshUpdateMenu();
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            Action result;
+            try { result = work(); }
+            catch (Exception ex) { result = delegate { failed(ex); }; }
+            lock (updateLock) updateCompletion = result;
+        });
+    }
+
+    void CheckForUpdate(bool manual)
+    {
+        if (updateInstallDirectory == null || exiting || updateBusy || updateInstalling) return;
+        nextUpdateCheck = DateTime.UtcNow.AddHours(24);
+        string keepInstaller = updateInstaller;
+        RunUpdateWork(delegate
+        {
+            CleanUpdateCache(keepInstaller);
+            var release = ReleaseUpdates.Check(RunningVersion);
+            return delegate
+            {
+                if (release == null)
+                {
+                    DiscardUpdateInstaller();
+                    availableUpdate = null;
+                    updateInstallRequested = false;
+                    if (manual) ShowUpdateNotice("updateCurrent", RunningVersion, ToolTipIcon.Info);
+                    return;
+                }
+                if (availableUpdate == null || availableUpdate.Version != release.Version)
+                {
+                    DiscardUpdateInstaller();
+                    availableUpdate = release;
+                    nextUpdateDownload = nextUpdateInstall = DateTime.MinValue;
+                    ShowUpdateNotice("updateAvailable", release.Version, ToolTipIcon.Info);
+                }
+                else if (manual) ShowUpdateNotice("updateAvailable", release.Version, ToolTipIcon.Info);
+            };
+        }, delegate(Exception ex)
+        {
+            Log.Write("Update check: " + ex.Message);
+            if (manual) ShowUpdateNotice(ex is ReleaseFeedUnavailableException ? "updateNoPublicRelease" : "updateCheckFailed", null, ToolTipIcon.Warning);
+        });
+    }
+
+    void ShowUpdateNotice(string key, Version version, ToolTipIcon icon)
+    {
+        string text = version == null ? I18n.T(key) : I18n.T(key, "version", version.ToString(3));
+        tray.ShowBalloonTip(6000, "DynamicDesktop", text, icon);
+    }
+
+    void DiscardUpdateInstaller()
+    {
+        if (updateInstaller == null) return;
+        try { File.Delete(updateInstaller); }
+        catch (Exception ex) { Log.Write("Could not remove staged update: " + ex.Message); }
+        updateInstaller = null;
+    }
+
+    static void CleanUpdateCache(string keep)
+    {
+        string directory = Path.Combine(Log.DataDir, "updates");
+        if (!Directory.Exists(directory)) return;
+        try
+        {
+            foreach (string path in Directory.EnumerateFiles(directory, "DynamicDesktop-update-*.exe"))
+            {
+                if (String.Equals(path, keep, StringComparison.OrdinalIgnoreCase)) continue;
+                const string prefix = "DynamicDesktop-update-";
+                string name = Path.GetFileNameWithoutExtension(path);
+                Guid id;
+                if (name.StartsWith(prefix, StringComparison.Ordinal) && Guid.TryParseExact(name.Substring(prefix.Length), "N", out id) &&
+                    File.GetLastWriteTimeUtc(path) < DateTime.UtcNow.AddDays(-2)) File.Delete(path);
+            }
+        }
+        catch (Exception ex) { Log.Write("Could not clean old updater downloads: " + ex.Message); }
+    }
+
+    void DownloadUpdate()
+    {
+        var release = availableUpdate;
+        RunUpdateWork(delegate
+        {
+            string directory = Path.Combine(Log.DataDir, "updates");
+            string path = ReleaseUpdates.Download(release, directory);
+            return delegate { updateInstaller = path; };
+        }, delegate(Exception ex)
+        {
+            Log.Write("Update download: " + ex.Message);
+            if (updateInstallRequested) ShowUpdateNotice("updateDownloadFailed", null, ToolTipIcon.Warning);
+            updateInstallRequested = false;
+            nextUpdateDownload = DateTime.UtcNow.AddHours(6);
+        });
+    }
+
+    bool CanInstallUpdate()
+    {
+        if (!updateInstallRequested && (!Settings.AutoInstallUpdates || settingsWin != null)) return false;
+        return !forms.Exists(f => f.IsSharing);
+    }
+
+    void InstallUpdate()
+    {
+        var release = availableUpdate;
+        string installer = updateInstaller;
+        RunUpdateWork(delegate
+        {
+            ReleaseUpdates.VerifyInstaller(release, installer);
+            return delegate
+            {
+                if (!CanInstallUpdate()) return;
+                try
+                {
+                    var info = new ProcessStartInfo(installer, "/S /UPDATE /D=" + updateInstallDirectory) { UseShellExecute = false };
+                    var process = Process.Start(info);
+                    if (process == null) throw new InvalidOperationException("Could not start the updater installer.");
+                    updateInstalling = true;
+                    Log.Write("Installing DynamicDesktop " + release.Version.ToString(3));
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        string failure;
+                        using (process)
+                        {
+                            try
+                            {
+                                process.WaitForExit();
+                                failure = "The installer exited with code " + process.ExitCode + " without closing the old application.";
+                            }
+                            catch (Exception ex) { failure = "Could not wait for the updater installer: " + ex.Message; }
+                        }
+                        try { File.Delete(installer); } catch (Exception) { }
+                        lock (updateLock) updateCompletion = delegate
+                        {
+                            // A successful installer closes this instance and starts the new one.
+                            UpdateInstallFailed(failure);
+                        };
+                    });
+                }
+                catch (Exception ex) { UpdateInstallFailed(ex.Message); }
+            };
+        }, delegate(Exception ex) { UpdateInstallFailed(ex.Message); });
+    }
+
+    void UpdateInstallFailed(string message)
+    {
+        Log.Write("Update installation: " + message);
+        updateInstalling = false;
+        DiscardUpdateInstaller();
+        nextUpdateInstall = nextUpdateDownload = DateTime.UtcNow.AddHours(6);
+        ShowUpdateNotice("updateInstallFailed", null, ToolTipIcon.Warning);
+        updateInstallRequested = false;
+    }
+
+    void WatchUpdates()
+    {
+        if (updateInstallDirectory == null || exiting) return;
+        Action completion;
+        lock (updateLock) { completion = updateCompletion; updateCompletion = null; }
+        if (completion != null)
+        {
+            updateBusy = false;
+            completion();
+            RefreshUpdateMenu();
+        }
+        if (updateBusy || updateInstalling) return;
+        var now = DateTime.UtcNow;
+        if (now >= nextUpdateCheck) { CheckForUpdate(false); return; }
+        if (availableUpdate == null || (!Settings.AutoInstallUpdates && !updateInstallRequested)) return;
+        if (updateInstaller == null && now >= nextUpdateDownload) DownloadUpdate();
+        else if (updateInstaller != null && now >= nextUpdateInstall && CanInstallUpdate()) InstallUpdate();
+    }
+
     void Watch()
     {
         if (dead != null) { try { dead.Dispose(); } catch { } dead = null; }
@@ -839,6 +1088,7 @@ class HostContext : ApplicationContext
         if (DateTime.Now >= saveDue) { saveDue = DateTime.MaxValue; Settings.Save(); }
         if (forms.Count > 0 && DisplaySignature() != displaySignature) RebuildForms();
         if (form == null && !exiting && DateTime.Now >= nextStart) StartForm();
+        WatchUpdates();
     }
 
     void Exit()
@@ -908,17 +1158,22 @@ class DesktopMouseHook : IDisposable
         if (code >= 0 && message.ToInt32() == 0x0201)
         {
             Native.POINT point = (Native.POINT)Marshal.PtrToStructure(data, typeof(Native.POINT));
-            IntPtr target = Native.WindowFromPoint(point);
-            while (target != IntPtr.Zero)
-            {
-                var name = new StringBuilder(128);
-                Native.GetClassName(target, name, name.Capacity);
-                string c = name.ToString();
-                if (c == "SHELLDLL_DefView" || c == "Progman" || c == "WorkerW") { clicked(point.X, point.Y); break; }
-                target = Native.GetParent(target);
-            }
+            if (IsDesktop(point)) clicked(point.X, point.Y);
         }
         return Native.CallNextHookEx(hook, code, message, data);
+    }
+    public static bool IsDesktop(Native.POINT point)
+    {
+        IntPtr target = Native.WindowFromPoint(point);
+        while (target != IntPtr.Zero)
+        {
+            var name = new StringBuilder(128);
+            Native.GetClassName(target, name, name.Capacity);
+            string c = name.ToString();
+            if (c == "SHELLDLL_DefView" || c == "Progman" || c == "WorkerW") return true;
+            target = Native.GetParent(target);
+        }
+        return false;
     }
     public void Dispose() { if (hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; } }
 }
@@ -1054,7 +1309,7 @@ class WallpaperForm : Form
 {
     static readonly HashSet<IntPtr> WallpaperWindows = new HashSet<IntPtr>();
     readonly WebView2 web;
-    readonly System.Windows.Forms.Timer iconTimer, fgTimer;
+    readonly System.Windows.Forms.Timer iconTimer, fgTimer, pointerTimer;
     readonly string pageDir;
     readonly IconReader reader = new IconReader();
     Rectangle screen;
@@ -1066,9 +1321,12 @@ class WallpaperForm : Form
     int lastPause = -1;
     bool manualPause, shuttingDown;
     bool iconsDirty = true;
+    bool pointerActive;
+    Point lastPointer;
     DateTime lastIconPoll = DateTime.MinValue;
 
     public bool Fatal { get; private set; }
+    public bool IsSharing { get { return recordDone != null || snapshotDone != null; } }
 
     string page;                                        // Current theme page (the page field in themes.json).
     public Func<string> SettingsJson;                   // Settings message sent when the page is ready.
@@ -1102,6 +1360,9 @@ class WallpaperForm : Form
         fgTimer = new System.Windows.Forms.Timer();
         fgTimer.Interval = 500;
         fgTimer.Tick += delegate { PollForeground(); };
+        pointerTimer = new System.Windows.Forms.Timer();
+        pointerTimer.Interval = 75;
+        pointerTimer.Tick += delegate { PollWildlifePointer(); };
     }
 
     public void SetManualPause(bool v) { manualPause = v; PollForeground(); }
@@ -1109,6 +1370,23 @@ class WallpaperForm : Form
     public void Ripple(int x, int y)
     {
         if (screen.Contains(x, y)) Post("{\"t\":\"ripple\",\"x\":" + (x - screen.X) + ",\"y\":" + (y - screen.Y) + "}");
+    }
+    bool IsWildlifePage { get { return string.Equals(page.Split('?')[0], "kelp.html", StringComparison.OrdinalIgnoreCase); } }
+    void ClearWildlifePointer()
+    {
+        if (!pointerActive) return;
+        pointerActive = false;
+        Post("{\"t\":\"wildlifePointer\",\"x\":null,\"y\":null}");
+    }
+    void PollWildlifePointer()
+    {
+        Point point = Cursor.Position;
+        var nativePoint = new Native.POINT { X = point.X, Y = point.Y };
+        if (!screen.Contains(point) || !DesktopMouseHook.IsDesktop(nativePoint)) { ClearWildlifePointer(); return; }
+        if (pointerActive && point == lastPointer) return;
+        pointerActive = true;
+        lastPointer = point;
+        Post("{\"t\":\"wildlifePointer\",\"x\":" + (point.X - screen.X) + ",\"y\":" + (point.Y - screen.Y) + "}");
     }
     public void SetPassthrough(bool v)
     {
@@ -1217,6 +1495,8 @@ class WallpaperForm : Form
     // Switch themes by navigating to the new page; resend settings and icons when it is ready.
     public void LoadPage(string newPage)
     {
+        pointerTimer.Stop();
+        ClearWildlifePointer();
         page = newPage;
         if (web.CoreWebView2 == null) return;
         try { web.CoreWebView2.Navigate(PageUrl); }
@@ -1258,7 +1538,8 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
                 if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
                 if (EnvironmentJson != null) core.PostWebMessageAsString(EnvironmentJson());
-                lastIcons = ""; lastMasks = ""; lastMaskPoll = DateTime.MinValue; lastPause = -1; PollIcons(); PollForeground();
+                lastIcons = ""; lastMasks = ""; lastMaskPoll = DateTime.MinValue; lastPause = -1; pointerActive = false;
+                PollIcons(); PollForeground();
             };
             core.Navigate(PageUrl);
             iconTimer.Start();
@@ -1528,6 +1809,9 @@ class WallpaperForm : Form
         if (p == lastPause) return;
         lastPause = p;
         Post("{\"t\":\"pause\",\"v\":" + (pause ? "true" : "false") + "}");
+        if (shuttingDown) return;
+        if (pause || !IsWildlifePage) { pointerTimer.Stop(); ClearWildlifePointer(); }
+        else { pointerTimer.Start(); PollWildlifePointer(); }
         Log.Write(string.Format("{0} on {1}", pause ? "Paused" : "Resumed", screen));
     }
 
@@ -1536,7 +1820,7 @@ class WallpaperForm : Form
     {
         if (shuttingDown) return;
         shuttingDown = true;
-        iconTimer.Stop(); fgTimer.Stop();
+        iconTimer.Stop(); fgTimer.Stop(); pointerTimer.Stop();
         reader.Dispose();
         IntPtr parent = parentHwnd;
         try { web.Dispose(); } catch { }
@@ -1551,7 +1835,7 @@ class WallpaperForm : Form
     {
         WallpaperWindows.Remove(Handle);
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
-        iconTimer.Stop(); fgTimer.Stop();
+        iconTimer.Stop(); fgTimer.Stop(); pointerTimer.Stop();
         reader.Dispose();
         base.OnHandleDestroyed(e);
     }

@@ -33,40 +33,50 @@ if (-not $PortableOnly -and -not $SourceOnly) {
 
 # A fixed source list prevents other editions or private working files entering this package.
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
-    'host\DesktopHost.cs', 'host\Themes.cs', 'host\DynamicDesktop.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
+    'host\DesktopHost.cs', 'host\Themes.cs', 'host\ReleaseUpdates.cs', 'host\DynamicDesktop.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
     'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json',
     'docs\images\beach.webp', 'docs\images\meadow.webp', 'docs\images\maldives.webp')
 $themeFiles = @('flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'serve.ps1', 'themes.json',
     'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js', 'environment.js', 'community-effects.js', 'living-designs.js', 'woodland.js', 'landscape.js',
-    'locations.js',
+    'locations.js', 'kelp.js',
     'i18n\en.json', 'i18n\nl.json',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
-    'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png')
+    'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png',
+    'assets\kelp\cruise-sub.png', 'assets\kelp\super-sub.png', 'assets\kelp\nemo.png',
+    'assets\kelp\c-explorer.png', 'assets\kelp\c-researcher.png', 'assets\kelp\greyshark.png')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
 $freePages = @{
     beach = 'flat.html'; meadow = 'meadow.html'; isles = 'isles.html'; circuit = 'circuit.html'; steampunk = 'steam.html'
     cosmos = 'cosmos.html'; 'living-lagoon' = 'living-lagoon.html'; 'living-sky' = 'living-sky.html'
-    'living-colors' = 'living-colors.html'; 'community-sky' = 'community-sky.html'; woodland = 'woodland.html'
+    'living-colors' = 'living-colors.html'; woodland = 'woodland.html'; kelp = 'kelp.html'
     'beach-turquoise' = 'landscape.html?theme=beach-turquoise'
     'lake' = 'landscape.html?theme=lake'
-    'sky' = 'landscape.html?theme=sky'
-    'ocean' = 'landscape.html?theme=ocean'
     'forest' = 'landscape.html?theme=forest'
-    'pinkforest' = 'landscape.html?theme=pinkforest'
     'map' = 'landscape.html?theme=map'
-    'citymap' = 'landscape.html?theme=citymap'
     'worldmap' = 'landscape.html?theme=worldmap'
     'nauticalmap' = 'landscape.html?theme=nauticalmap'
     'lotus' = 'landscape.html?theme=lotus'
 }
 if ($ready.Count -ne $freePages.Count -or $themes.Count -ne $ready.Count -or
     @($themes.id | Sort-Object -Unique).Count -ne $themes.Count) { throw 'Unexpected theme catalog' }
+$variantPages = @{ 'living-sky' = @('living-sky.html', 'landscape.html?theme=sky', 'landscape.html?theme=ocean') }
 foreach ($theme in $ready) {
     if ($theme.locked -or -not $freePages.ContainsKey($theme.id) -or
         $theme.page -cne $freePages[$theme.id]) { throw 'Unexpected free theme: ' + $theme.id }
-    $file = ($theme.page -split '\?', 2)[0]
-    if ($themeFiles -notcontains $file) { $themeFiles += $file }
+    $pages = @($theme.page)
+    if ($variantPages.ContainsKey($theme.id)) {
+        $expected = $variantPages[$theme.id]
+        if (@($theme.variantPages).Count -ne $expected.Count) { throw 'Unexpected variant pages: ' + $theme.id }
+        for ($i = 0; $i -lt $expected.Count; $i++) {
+            if ($theme.variantPages[$i] -cne $expected[$i]) { throw 'Unexpected variant page: ' + $theme.id }
+        }
+        $pages += $theme.variantPages
+    } elseif (@($theme.variantPages).Where({ $null -ne $_ }).Count -gt 0) { throw 'Unexpected variant pages: ' + $theme.id }
+    foreach ($page in $pages) {
+        $file = ($page -split '\?', 2)[0]
+        if ($themeFiles -notcontains $file) { $themeFiles += $file }
+    }
 }
 foreach ($theme in $themes) {
     $match = [regex]::Match([string]$theme.thumb, '^url\(([^\)?]+)')
@@ -90,6 +100,8 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($sourceStage, (Join-Path $payload 'DynamicDesktop-source.zip'))
 $sourceOutput = Join-Path $dist 'DynamicDesktop-source.zip'
 Copy-Item -LiteralPath (Join-Path $payload 'DynamicDesktop-source.zip') -Destination $sourceOutput -Force
+$sourceHash = (Get-FileHash -LiteralPath $sourceOutput -Algorithm SHA256).Hash
+[IO.File]::WriteAllText(($sourceOutput + '.sha256'), "$sourceHash  $([IO.Path]::GetFileName($sourceOutput))`r`n", (New-Object Text.UTF8Encoding($false)))
 Write-Host "Source: $sourceOutput"
 if ($SourceOnly) { return }
 # Only program data is installed. The accompanying ZIP contains the exact corresponding source.

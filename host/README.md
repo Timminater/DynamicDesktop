@@ -19,10 +19,17 @@ The build uses the Windows C# compiler and uses the local WebView2 SDK from `hos
 | `--menu` | Open the tray menu. |
 | `--exit` | Exit and restore the system wallpaper. |
 | `--exit-installed` | Installer command. Exit only the instance using the same executable path. |
+| `--updated` / `--update-failed` | Installer commands. Restart in the background and report the result. |
 | `--portable` | Use the `data` directory beside the executable. |
 | `--test` | Use `%TEMP%\DynamicDesktop-test` and skip the global hotkey. |
 
 An absolute `DYNAMICDESKTOP_PROFILE_DIR` overrides the selected profile. Isolated profiles keep settings, the WebView2 cache and single-instance events separate from the default `%LOCALAPPDATA%\DynamicDesktop` profile. Startup registration is disabled in isolated profiles.
+
+## Updates
+
+Registered Windows installations check public GitHub Releases for `Timminater/DynamicDesktop` shortly after startup and once a day while running. The tray can check immediately and lets you turn automatic installation off. Automatic installation waits until Settings is closed and any share export has finished. The installer keeps the registered installation directory and the existing settings, then restarts the wallpaper in the background. Portable and development builds keep their own files.
+
+Publish stable versions as `vX.Y.Z` with the `DynamicDesktop-X.Y.Z-win-x64-Setup.exe` asset from the installer build. The updater verifies the GitHub SHA-256 digest or the accompanying `.exe.sha256` asset. The public feed is accessed without credentials.
 
 ## Desktop behavior
 

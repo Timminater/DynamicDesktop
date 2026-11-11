@@ -457,6 +457,7 @@ $('themes').addEventListener('click', e => {
   const b = e.target.closest('.theme');
   if (!b || b.disabled) return;
   if (b.dataset.id === state.theme) return;
+  flush();
   state.theme = b.dataset.id;
   send({ t: 'theme', id: state.theme });
   if (seedOf(state.theme) === undefined) setSeed(newSeed(), false);
@@ -567,7 +568,7 @@ function renderControls() {
   $('controls').innerHTML = theme.groups.map(g => `
     <div class="group"><h3>${g.name}</h3>
       ${g.params.map(p => `
-        <div class="param${vals[p.key] !== p.default ? ' changed' : ''}" id="p-${p.key}">
+        <div class="param${vals[p.key] !== p.default ? ' changed' : ''}" id="p-${p.key}"${p.variants && !p.variants.includes(vals.variant) ? ' hidden' : ''}>
           <div class="row"><span class="label">${p.label}${p.hint ? `<span class="hint">${p.hint}</span>` : ''}</span>
             <span class="right">
               <button class="undo" data-reset="${p.key}" title="${t('resetOne', { v: fmt(p, p.default) })}" aria-label="${t('resetOneAria', { label: p.label })}">↺</button>
@@ -587,7 +588,7 @@ function fill(inp) { inp.style.setProperty('--p', ((inp.value - inp.min) / (inp.
 const paramOf = key => themeById(state.theme).groups.flatMap(g => g.params).find(x => x.key === key);
 
 
-let pending = {}, scheduled = false;
+let pending = {}, pendingTimer = 0;
 function setParam(key, v) {
   if (key === 'adaptive') {
     if (!themeById(state.theme).adaptive || (v !== 0 && v !== 1)) return;
@@ -606,8 +607,13 @@ function setParam(key, v) {
   }
   (state.params[state.theme] = state.params[state.theme] || {})[key] = v;
   pending[key] = v;
+  if (key === 'variant') {
+    for (const group of themeById(state.theme).groups) for (const param of group.params) {
+      if (param.variants) $('p-' + param.key).hidden = !param.variants.includes(v);
+    }
+  }
 
-  if (!scheduled) { scheduled = true; setTimeout(flush, 30); }
+  if (!pendingTimer) pendingTimer = setTimeout(flush, 30);
 }
 $('controls').addEventListener('input', e => { if (e.target.dataset.key) setParam(e.target.dataset.key, +e.target.value); });
 
@@ -622,10 +628,13 @@ $('controls').addEventListener('dblclick', e => {
   if (inp) setParam(inp.dataset.key, paramOf(inp.dataset.key).default);
 });
 function flush() {
-  scheduled = false;
+  clearTimeout(pendingTimer);
+  pendingTimer = 0;
   const batch = pending; pending = {};
-  for (const k in batch) send({ t: 'set', theme: state.theme, key: k, value: batch[k] });
-  toPreview({ t: 'settings', v: batch });
+  const keys = Object.keys(batch);
+  if (!keys.length) return;
+  for (const k of keys) send({ t: 'set', theme: state.theme, key: k, value: batch[k] });
+  if (!Object.hasOwn(batch, 'variant') || !navigatePreview()) toPreview({ t: 'settings', v: batch });
   flashSaved();
 }
 let savedT = 0;
@@ -692,9 +701,17 @@ function showTheme() {
   renderControls();
   updateFoot();
   layoutPreview();
-  const page = new URL(themeById(state.theme).page, location.href);
+  navigatePreview();
+}
+
+function navigatePreview() {
+  const theme = themeById(state.theme);
+  const path = theme.variantPages?.[valuesOf(theme).variant] || theme.page;
+  const page = new URL(path, location.href);
   page.searchParams.set('preview', '1');
+  if (frame.src === page.href) return false;
   frame.src = page.href;
+  return true;
 }
 
 
@@ -818,11 +835,23 @@ function onHost(m) {
 
 function mockHost() {
   const k = window.devicePixelRatio || 1, W = 1707, H = 1067, r = [];
+  const query = new URLSearchParams(location.search);
+  const id = query.get('theme');
+  const alias = state.registry.aliases?.[id];
+  const requested = themeById(alias?.id || id);
+  const theme = requested?.status === 'ready' ? requested.id : 'beach';
+  const params = alias?.params ? { [theme]: { ...alias.params } } : {};
   const cell = (c, row) => { const x = 4 + c * 76, y = 6 + row * 100; r.push([x * k, y * k, (x + 76) * k, (y + 92) * k]); };
-  for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
-  for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
+  if (theme === 'kelp') {
+    for (const [c, row] of [[2, 2], [3, 2], [2, 3], [3, 3], [2, 4], [3, 4], [18, 6], [19, 6], [18, 7], [19, 7]]) cell(c, row);
+    state.previewMotion = $('previewMotion').checked = true;
+  } else {
+    for (let c = 0; c < 4; c++) for (let row = 0; row < 9; row++) cell(c, row);
+    for (const [c, row] of [[6, 0], [6, 1], [7, 3], [8, 3], [8, 4], [12, 1], [13, 1], [14, 1], [13, 2], [14, 2], [20, 0], [21, 0], [19, 5], [20, 5]]) cell(c, row);
+  }
   const bl = browserLang();
-  onHost({ t: 'init', theme: 'beach', params: {}, screen: { w: W * k, h: H * k }, autostart: false, lang: 'auto', langEff: bl, langSys: bl });
+  const lang = Object.hasOwn(LANGS, query.get('lang')) ? query.get('lang') : 'auto';
+  onHost({ t: 'init', theme, params, screen: { w: W * k, h: H * k }, autostart: false, lang, langEff: lang === 'auto' ? bl : lang, langSys: bl });
   onHost({ t: 'icons', vis: true, r });
 }
 

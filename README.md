@@ -9,7 +9,7 @@ DynamicDesktop is an adaptive live wallpaper for Windows. It uses the positions 
 ## Features
 
 - Beach and Meadow have day, night and automatic lighting. Choose a location using the online search or enter coordinates and a time zone manually. The search uses the first four digits of Dutch postcodes to find the corresponding place. Scene shadows and local desktop icon shadows can be controlled separately.
-- All 22 themes are available. The eleven formerly locked scenes have original implementations.
+- All 18 themes are available, including UboatWorx and the consolidated Cloud Garden, Forest and Hand-drawn City styles.
 - Each monitor shows the active theme with its own icon layout. Fullscreen and maximized apps can pause the wallpaper on the affected monitor. Preview and sharing use the primary monitor.
 - Settings supports English and Dutch, with a still preview by default and a live preview switch.
 - The tray menu offers pause, restart, startup on sign-in, mouse passthrough and exit.

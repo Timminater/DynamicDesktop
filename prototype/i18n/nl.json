@@ -93,6 +93,16 @@
     "trayPause": "Animatie pauzeren",
     "trayReload": "Opnieuw laden",
     "trayAutostart": "Starten met Windows",
+    "trayCheckUpdate": "Controleren op updates",
+    "trayInstallUpdate": "Update {version} installeren",
+    "trayAutoUpdate": "Updates automatisch installeren",
+    "updateAvailable": "DynamicDesktop {version} is beschikbaar.",
+    "updateInstalled": "DynamicDesktop is bijgewerkt naar {version}.",
+    "updateCurrent": "DynamicDesktop {version} is up-to-date.",
+    "updateNoPublicRelease": "Op GitHub is nog geen openbare release van DynamicDesktop beschikbaar.",
+    "updateCheckFailed": "Controleren op updates is mislukt. Probeer het later opnieuw.",
+    "updateDownloadFailed": "De update kon niet worden gedownload of gecontroleerd. Probeer het later opnieuw.",
+    "updateInstallFailed": "De update kon niet worden geïnstalleerd. Probeer het later opnieuw.",
     "trayExit": "Afsluiten (oorspronkelijke achtergrond herstellen)",
     "welcomeTitle": "DynamicDesktop is actief",
     "welcomeBody": "Klik op het DynamicDesktop-pictogram in het systeemvak{hotkey} om het menu te openen.\nZie je het pictogram niet? Klik dan op ^ rechts op de taakbalk.",
@@ -157,18 +167,12 @@
         "sceneShadows": {
           "label": "Schaduwen van het landschap",
           "hint": "Laat de schaduwen meebewegen met de zon",
-          "options": [
-            "Uit",
-            "Aan"
-          ]
+          "options": ["Uit", "Aan"]
         },
         "iconShadows": {
           "label": "Schaduwen van bureaubladiconen",
           "hint": "Gebruik de vorm van je iconen om lokaal schaduwen te tekenen",
-          "options": [
-            "Uit",
-            "Aan"
-          ]
+          "options": ["Uit", "Aan"]
         },
         "shadowSize": {
           "label": "Schaduwlengte"
@@ -184,11 +188,7 @@
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -233,18 +233,12 @@
         "sceneShadows": {
           "label": "Schaduwen van het landschap",
           "hint": "Laat de schaduwen meebewegen met de zon",
-          "options": [
-            "Uit",
-            "Aan"
-          ]
+          "options": ["Uit", "Aan"]
         },
         "iconShadows": {
           "label": "Schaduwen van bureaubladiconen",
           "hint": "Gebruik de vorm van je iconen om lokaal schaduwen te tekenen",
-          "options": [
-            "Uit",
-            "Aan"
-          ]
+          "options": ["Uit", "Aan"]
         },
         "shadowSize": {
           "label": "Schaduwlengte"
@@ -252,11 +246,7 @@
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -264,63 +254,9 @@
       "name": "Maldiven",
       "desc": "Een tropische lagune"
     },
-    "sky": {
-      "name": "Lucht",
-      "desc": "Witte wolken verzamelen zich rond je iconen. Kies daglicht, nacht of automatische verlichting.",
-      "groups": [
-        "Landschap",
-        "Verlichting"
-      ],
-      "params": {
-        "spread": {
-          "label": "Gebied rond iconen"
-        },
-        "detail": {
-          "label": "Dichtheid van details"
-        },
-        "speed": {
-          "label": "Animatiesnelheid"
-        },
-        "lighting": {
-          "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
-        }
-      }
-    },
-    "ocean": {
-      "name": "Oceaan",
-      "desc": "Wolken boven een blauwe zee",
-      "groups": [
-        "Landschap",
-        "Verlichting"
-      ],
-      "params": {
-        "spread": {
-          "label": "Gebied rond iconen"
-        },
-        "detail": {
-          "label": "Dichtheid van details"
-        },
-        "speed": {
-          "label": "Animatiesnelheid"
-        },
-        "lighting": {
-          "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
-        }
-      }
-    },
     "forest": {
       "name": "Bos",
-      "desc": "Een open plek tussen de bomen",
+      "desc": "Geschilderde boomkruinen omlijsten de open plekken rond je iconen, in groen of roze.",
       "groups": [
         "Landschap",
         "Verlichting"
@@ -337,44 +273,20 @@
         },
         "lighting": {
           "label": "Verlichting",
+          "options": ["Dag", "Nacht", "Automatisch"]
+        },
+        "palette": {
+          "label": "Palet",
           "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
-        }
-      }
-    },
-    "pinkforest": {
-      "name": "Roze bos",
-      "desc": "Een bos van roze bomen",
-      "groups": [
-        "Landschap",
-        "Verlichting"
-      ],
-      "params": {
-        "spread": {
-          "label": "Gebied rond iconen"
-        },
-        "detail": {
-          "label": "Dichtheid van details"
-        },
-        "speed": {
-          "label": "Animatiesnelheid"
-        },
-        "lighting": {
-          "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
+            "Groen",
+            "Roze"
           ]
         }
       }
     },
     "map": {
       "name": "Getekende stad",
-      "desc": "Een stadskaart met pleinen rond je pictogrammen",
+      "desc": "Een getekende stadskaart met pleinen rond je iconen en klassieke of kleurrijke straten.",
       "groups": [
         "Landschap",
         "Verlichting"
@@ -391,37 +303,13 @@
         },
         "lighting": {
           "label": "Verlichting",
+          "options": ["Dag", "Nacht", "Automatisch"]
+        },
+        "variant": {
+          "label": "Stijl",
           "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
-        }
-      }
-    },
-    "citymap": {
-      "name": "Kleurrijke stad",
-      "desc": "Een kleurrijke stadskaart",
-      "groups": [
-        "Landschap",
-        "Verlichting"
-      ],
-      "params": {
-        "spread": {
-          "label": "Gebied rond iconen"
-        },
-        "detail": {
-          "label": "Dichtheid van details"
-        },
-        "speed": {
-          "label": "Animatiesnelheid"
-        },
-        "lighting": {
-          "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
+            "Klassiek",
+            "Kleurrijk"
           ]
         }
       }
@@ -445,11 +333,7 @@
         },
         "lighting": {
           "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -472,11 +356,7 @@
         },
         "lighting": {
           "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -577,10 +457,7 @@
         },
         "scan": {
           "label": "Scanlijn",
-          "options": [
-            "Uit",
-            "Aan"
-          ],
+          "options": ["Uit", "Aan"],
           "hint": "Een lichtbalk die van boven naar beneden over de sporen schuift"
         }
       }
@@ -712,17 +589,13 @@
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
     "living-sky": {
       "name": "Wolkentuin",
-      "desc": "Gelaagde wolkenbanken verzamelen zich rond je iconen en werpen schaduwen.",
+      "desc": "Wolken vormen zich rond je iconen in een gelaagde of getekende lucht, of boven zee.",
       "groups": [
         "Rond iconen",
         "Animatie",
@@ -742,16 +615,21 @@
           "label": "Kleurenpalet",
           "options": [
             "Blauwe lucht",
-            "Zonsondergang"
+            "Zonsondergang",
+            "Nachtlucht"
           ]
         },
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
+          "options": ["Dag", "Nacht", "Automatisch"]
+        },
+        "variant": {
+          "label": "Stijl",
           "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
+            "Gelaagd",
+            "Getekend",
+            "Boven zee"
           ]
         }
       }
@@ -786,52 +664,12 @@
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
-        }
-      }
-    },
-    "community-sky": {
-      "name": "Lucht (community)",
-      "desc": "Zachte wolken verzamelen zich rond je iconen, met kleinere wolken op de achtergrond.",
-      "groups": [
-        "Wolken",
-        "Verlichting"
-      ],
-      "params": {
-        "sigma": {
-          "label": "Wolkgrootte"
-        },
-        "detail": {
-          "label": "Wolkendekking"
-        },
-        "speed": {
-          "label": "Drijfsnelheid"
-        },
-        "palette": {
-          "label": "Luchtkleuren",
-          "options": [
-            "Blauw",
-            "Schemering",
-            "Nacht"
-          ]
-        },
-        "lighting": {
-          "label": "Verlichting",
-          "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
     "woodland": {
-      "name": "Bos (community)",
+      "name": "Boslandschap",
       "desc": "Boomkruinen omringen open plekken die gevormd worden door je bureaubladiconen.",
       "groups": [
         "Bos",
@@ -850,11 +688,7 @@
         "lighting": {
           "label": "Verlichting",
           "hint": "Kies daglicht, een vaste nachtstand of de zonnestand op jouw locatie",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -875,11 +709,7 @@
         },
         "lighting": {
           "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -900,11 +730,7 @@
         },
         "lighting": {
           "label": "Verlichting",
-          "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
-          ]
+          "options": ["Dag", "Nacht", "Automatisch"]
         }
       }
     },
@@ -925,11 +751,60 @@
         },
         "lighting": {
           "label": "Verlichting",
+          "options": ["Dag", "Nacht", "Automatisch"]
+        }
+      }
+    },
+    "kelp": {
+      "name": "UboatWorx",
+      "desc": "Kelp, rifbogen of drijvend slib omlijsten je bureaubladiconen. Af en toe vaart er een duikboot voorbij.",
+      "groups": [
+        "Onderwaterlandschap",
+        "Vaartuigen",
+        "Zeeleven"
+      ],
+      "params": {
+        "landscape": {
+          "label": "Landschap",
+          "options": ["Kelp", "Rifbogen", "Slibvensters"]
+        },
+        "lighting": {
+          "label": "Verlichting",
+          "options": ["Dag", "Nacht", "Automatisch"],
+          "hint": "Automatisch volgt de tijd op je ingestelde locatie of de klok van je computer."
+        },
+        "kelpDensity": {
+          "label": "Kelpdichtheid"
+        },
+        "current": {
+          "label": "Sterkte van de stroming",
+          "hint": "Bepaalt hoe sterk kelp en slib bewegen."
+        },
+        "vessel": {
+          "label": "Model",
           "options": [
-            "Dag",
-            "Nacht",
-            "Automatisch"
+            "Afwisselen",
+            "Cruise Sub 7",
+            "Super Sub",
+            "NEMO",
+            "C-Explorer",
+            "C-Researcher",
+            "GREYSHARK"
           ]
+        },
+        "interval": {
+          "label": "Gemiddelde tijd tussen passages",
+          "hint": "De werkelijke pauze varieert rond deze tijd."
+        },
+        "fish": {
+          "label": "Scholen vissen"
+        },
+        "wildlife": {
+          "label": "Kwallen en schildpadden",
+          "options": ["Uit", "Aan"]
+        },
+        "bubbles": {
+          "label": "Opstijgende luchtbellen"
         }
       }
     }

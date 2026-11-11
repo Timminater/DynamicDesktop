@@ -83,31 +83,21 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             },
             {
               "key": "sceneShadows",
               "label": "Scene shadows",
               "hint": "Change landscape shadows with the direction of sunlight",
-              "options": [
-                "Off",
-                "On"
-              ],
+              "options": ["Off", "On"],
               "default": 1
             },
             {
               "key": "iconShadows",
               "label": "Desktop icon shadows",
               "hint": "Use the shape of your icons to draw local shadows",
-              "options": [
-                "Off",
-                "On"
-              ],
+              "options": ["Off", "On"],
               "default": 0
             },
             {
@@ -222,11 +212,7 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             },
             {
@@ -243,20 +229,14 @@
               "key": "sceneShadows",
               "label": "Scene shadows",
               "hint": "Change landscape shadows with the direction of sunlight",
-              "options": [
-                "Off",
-                "On"
-              ],
+              "options": ["Off", "On"],
               "default": 1
             },
             {
               "key": "iconShadows",
               "label": "Desktop icon shadows",
               "hint": "Use the shape of your icons to draw local shadows",
-              "options": [
-                "Off",
-                "On"
-              ],
+              "options": ["Off", "On"],
               "default": 0
             },
             {
@@ -267,6 +247,111 @@
               "step": 0.05,
               "default": 1,
               "format": "times"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "kelp",
+      "adaptive": true,
+      "name": "UboatWorx",
+      "desc": "Kelp, reef arches or drifting silt frame your desktop icons as submersibles pass through the open water.",
+      "page": "kelp.html",
+      "status": "ready",
+      "thumb": "url(thumbs/kelp.webp) center / cover no-repeat, linear-gradient(150deg, #124564, #0a2d47)",
+      "thumbSource": "custom",
+      "groups": [
+        {
+          "name": "Underwater landscape",
+          "params": [
+            {
+              "key": "landscape",
+              "label": "Landscape",
+              "options": ["Kelp", "Reef arches", "Silt windows"],
+              "default": 0
+            },
+            {
+              "key": "lighting",
+              "label": "Lighting",
+              "options": ["Day", "Night", "Automatic"],
+              "hint": "Automatic follows the time at your configured location or your computer's clock.",
+              "default": 0
+            },
+            {
+              "key": "kelpDensity",
+              "label": "Kelp density",
+              "min": 0.25,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.64,
+              "format": "percent"
+            },
+            {
+              "key": "current",
+              "label": "Current strength",
+              "hint": "Controls the movement of kelp and silt.",
+              "min": 0,
+              "max": 1.6,
+              "step": 0.05,
+              "default": 0.8,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "Vessels",
+          "params": [
+            {
+              "key": "vessel",
+              "label": "Model",
+              "options": [
+                "Alternate",
+                "Cruise Sub 7",
+                "Super Sub",
+                "NEMO",
+                "C-Explorer",
+                "C-Researcher",
+                "GREYSHARK"
+              ],
+              "default": 0
+            },
+            {
+              "key": "interval",
+              "label": "Average time between passes",
+              "min": 30,
+              "max": 150,
+              "step": 5,
+              "default": 55,
+              "unit": "s",
+              "hint": "The actual pause varies around this value."
+            }
+          ]
+        },
+        {
+          "name": "Marine life",
+          "params": [
+            {
+              "key": "fish",
+              "label": "Schools of fish",
+              "min": 0,
+              "max": 3,
+              "step": 1,
+              "default": 1
+            },
+            {
+              "key": "wildlife",
+              "label": "Jellyfish and turtles",
+              "options": ["Off", "On"],
+              "default": 1
+            },
+            {
+              "key": "bubbles",
+              "label": "Rising bubbles",
+              "min": 0,
+              "max": 12,
+              "step": 1,
+              "default": 5
             }
           ]
         }
@@ -478,10 +563,7 @@
               "key": "scan",
               "label": "Scan band",
               "hint": "A band of light sweeping the traces from top to bottom",
-              "options": [
-                "Off",
-                "On"
-              ],
+              "options": ["Off", "On"],
               "default": 1
             }
           ]
@@ -756,11 +838,7 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -771,7 +849,7 @@
       "id": "living-sky",
       "adaptive": true,
       "name": "Cloud Garden",
-      "desc": "Drifting cloud banks floating over a blue or sunset sky",
+      "desc": "Clouds follow your icons in layered skies, hand-drawn skies or above the sea.",
       "page": "living-sky.html",
       "status": "ready",
       "thumb": "url(living-thumbs/sky.svg)",
@@ -781,8 +859,18 @@
           "name": "Around icons",
           "params": [
             {
+              "key": "variant",
+              "label": "Style",
+              "options": [
+                "Layered",
+                "Drawn",
+                "Above the sea"
+              ],
+              "default": 0
+            },
+            {
               "key": "sigma",
-              "label": "Area size",
+              "label": "Cloud size",
               "min": 35,
               "max": 180,
               "step": 1,
@@ -808,7 +896,7 @@
               "label": "Surface detail",
               "min": 0,
               "max": 1,
-              "step": 0.05,
+              "step": 0.01,
               "default": 0.65,
               "format": "percent"
             },
@@ -817,9 +905,13 @@
               "label": "Palette",
               "options": [
                 "Blue sky",
-                "Sunset"
+                "Sunset",
+                "Night sky"
               ],
-              "default": 0
+              "default": 0,
+              "variants": [
+                0
+              ]
             }
           ]
         },
@@ -830,15 +922,16 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
         }
+      ],
+      "variantPages": [
+        "living-sky.html",
+        "landscape.html?theme=sky",
+        "landscape.html?theme=ocean"
       ]
     },
     {
@@ -906,80 +999,7 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
-              "default": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "community-sky",
-      "name": "Sky (Community)",
-      "desc": "Soft clouds gather around your icons as smaller clouds drift over an open sky.",
-      "page": "community-sky.html",
-      "status": "ready",
-      "adaptive": true,
-      "thumb": "radial-gradient(ellipse 23% 15% at 25% 36%, #faffff 70%, transparent 75%), radial-gradient(ellipse 29% 20% at 70% 67%, #e5f1fa 75%, transparent 80%), linear-gradient(170deg, #2179c2, #8ec9f4)",
-      "groups": [
-        {
-          "name": "Clouds",
-          "params": [
-            {
-              "key": "sigma",
-              "label": "Cloud size",
-              "min": 35,
-              "max": 180,
-              "step": 1,
-              "default": 72,
-              "unit": "px"
-            },
-            {
-              "key": "detail",
-              "label": "Cloud coverage",
-              "min": 0,
-              "max": 1,
-              "step": 0.01,
-              "default": 0.3,
-              "format": "percent"
-            },
-            {
-              "key": "speed",
-              "label": "Drift speed",
-              "min": 0,
-              "max": 3,
-              "step": 0.05,
-              "default": 1,
-              "format": "times"
-            },
-            {
-              "key": "palette",
-              "label": "Sky colours",
-              "options": [
-                "Blue",
-                "Twilight",
-                "Night"
-              ],
-              "default": 0
-            }
-          ]
-        },
-        {
-          "name": "Lighting",
-          "params": [
-            {
-              "key": "lighting",
-              "label": "Lighting",
-              "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -988,7 +1008,7 @@
     },
     {
       "id": "woodland",
-      "name": "Forest (Community)",
+      "name": "Woodland",
       "desc": "Layered tree canopies sway around woodland clearings shaped by the desktop icons.",
       "page": "woodland.html",
       "status": "ready",
@@ -1034,11 +1054,7 @@
               "key": "lighting",
               "label": "Lighting",
               "hint": "Daylight, a fixed night scene, or the current sun at your location",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1093,11 +1109,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1152,129 +1164,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
-              "default": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "sky",
-      "name": "Sky",
-      "desc": "A cartoon blue sky where your icons sit on puffy round clouds — day, dusk or night",
-      "status": "ready",
-      "thumb": "url(thumbs/sky.webp?v=d706a0326d) center / cover no-repeat, radial-gradient(ellipse 30% 20% at 30% 40%, #fbfdff 55%, #c2ddf5 57%, #c2ddf5 75%, transparent 77%), radial-gradient(ellipse 24% 15% at 74% 68%, #fbfdff 55%, #c2ddf5 57%, #c2ddf5 75%, transparent 77%), linear-gradient(180deg, #3385cc 0%, #80bfe6 100%)",
-      "thumbSource": "custom",
-      "adaptive": true,
-      "page": "landscape.html?theme=sky",
-      "groups": [
-        {
-          "name": "Landscape",
-          "params": [
-            {
-              "key": "spread",
-              "label": "Area around icons",
-              "min": 40,
-              "max": 160,
-              "step": 1,
-              "default": 80,
-              "unit": "px"
-            },
-            {
-              "key": "detail",
-              "label": "Detail density",
-              "min": 0,
-              "max": 1,
-              "step": 0.01,
-              "default": 0.68,
-              "format": "percent"
-            },
-            {
-              "key": "speed",
-              "label": "Animation speed",
-              "min": 0,
-              "max": 3,
-              "step": 0.05,
-              "default": 1,
-              "format": "times"
-            }
-          ]
-        },
-        {
-          "name": "Lighting",
-          "params": [
-            {
-              "key": "lighting",
-              "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
-              "default": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "ocean",
-      "name": "Ocean",
-      "desc": "Looking down on a blue ocean — your icons hide in white clouds whose shadows fall on the sea",
-      "status": "ready",
-      "thumb": "url(thumbs/ocean.webp?v=a503d4f275) center / cover no-repeat, radial-gradient(ellipse 22% 16% at 36% 38%, #fbfdff 60%, #d5e4f5 75%, transparent 78%), radial-gradient(ellipse 22% 16% at 46% 58%, #1c58b4 70%, transparent 74%), radial-gradient(ellipse 18% 13% at 72% 70%, #fbfdff 60%, #d5e4f5 75%, transparent 78%), radial-gradient(ellipse 18% 13% at 80% 86%, #1c58b4 70%, transparent 74%), linear-gradient(160deg, #2a72d4 0%, #3a86e0 100%)",
-      "thumbSource": "custom",
-      "adaptive": true,
-      "page": "landscape.html?theme=ocean",
-      "groups": [
-        {
-          "name": "Landscape",
-          "params": [
-            {
-              "key": "spread",
-              "label": "Area around icons",
-              "min": 40,
-              "max": 160,
-              "step": 1,
-              "default": 80,
-              "unit": "px"
-            },
-            {
-              "key": "detail",
-              "label": "Detail density",
-              "min": 0,
-              "max": 1,
-              "step": 0.01,
-              "default": 0.68,
-              "format": "percent"
-            },
-            {
-              "key": "speed",
-              "label": "Animation speed",
-              "min": 0,
-              "max": 3,
-              "step": 0.05,
-              "default": 1,
-              "format": "times"
-            }
-          ]
-        },
-        {
-          "name": "Lighting",
-          "params": [
-            {
-              "key": "lighting",
-              "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1284,7 +1174,7 @@
     {
       "id": "forest",
       "name": "Forest",
-      "desc": "Your icons sit in a clearing ringed by gouache cartoon trees swaying in the breeze",
+      "desc": "Painted treetops surround clearings around your icons, with green and pink palettes.",
       "status": "ready",
       "thumb": "url(thumbs/forest.webp?v=d70cf321e5) center / cover no-repeat, radial-gradient(ellipse 30% 26% at 48% 52%, #c3d684 92%, transparent 96%), radial-gradient(circle at 14% 22%, #1f5a3a 9%, transparent 10%), radial-gradient(circle at 30% 14%, #4f8f5a 8%, transparent 9%), radial-gradient(circle at 82% 30%, #2f6e6a 10%, transparent 11%), radial-gradient(circle at 70% 86%, #8a9a3a 9%, transparent 10%), radial-gradient(circle at 22% 84%, #3c6f7c 10%, transparent 11%), linear-gradient(160deg, #2d6a45 0%, #3f7f50 50%, #2a5a48 100%)",
       "thumbSource": "custom",
@@ -1295,64 +1185,14 @@
           "name": "Landscape",
           "params": [
             {
-              "key": "spread",
-              "label": "Area around icons",
-              "min": 40,
-              "max": 160,
-              "step": 1,
-              "default": 80,
-              "unit": "px"
-            },
-            {
-              "key": "detail",
-              "label": "Detail density",
-              "min": 0,
-              "max": 1,
-              "step": 0.01,
-              "default": 0.68,
-              "format": "percent"
-            },
-            {
-              "key": "speed",
-              "label": "Animation speed",
-              "min": 0,
-              "max": 3,
-              "step": 0.05,
-              "default": 1,
-              "format": "times"
-            }
-          ]
-        },
-        {
-          "name": "Lighting",
-          "params": [
-            {
-              "key": "lighting",
-              "label": "Lighting",
+              "key": "palette",
+              "label": "Palette",
               "options": [
-                "Day",
-                "Night",
-                "Automatic"
+                "Green",
+                "Pink"
               ],
               "default": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "pinkforest",
-      "name": "Pink Forest",
-      "desc": "A watercolor forest: translucent pink treetops on fine ink trunks",
-      "status": "ready",
-      "thumb": "url(thumbs/pink%20forest.webp?v=56b5ef8117) center / cover no-repeat, radial-gradient(circle at 18% 30%, rgba(236,140,150,0.55) 13%, transparent 14%), radial-gradient(circle at 34% 20%, rgba(248,196,160,0.6) 11%, transparent 12%), radial-gradient(circle at 78% 26%, rgba(240,160,170,0.55) 14%, transparent 15%), radial-gradient(circle at 66% 78%, rgba(250,214,110,0.55) 12%, transparent 13%), radial-gradient(circle at 24% 80%, rgba(226,90,100,0.5) 11%, transparent 12%), radial-gradient(circle at 86% 74%, rgba(244,176,170,0.6) 13%, transparent 14%), linear-gradient(160deg, #fbf6ee 0%, #f5ede2 100%)",
-      "thumbSource": "custom",
-      "adaptive": true,
-      "page": "landscape.html?theme=pinkforest",
-      "groups": [
-        {
-          "name": "Landscape",
-          "params": [
+            },
             {
               "key": "spread",
               "label": "Area around icons",
@@ -1388,11 +1228,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1402,7 +1238,7 @@
     {
       "id": "map",
       "name": "Hand-drawn City",
-      "desc": "A bird's-eye map of an old town: rows of ink-drawn houses line the streets, and your icons sit in the squares",
+      "desc": "A hand-drawn city with squares around your icons and classic or colourful streets.",
       "status": "ready",
       "thumb": "url(thumbs/hand%20draw%20city.webp?v=651f4911f8) center / cover no-repeat, radial-gradient(ellipse 24% 22% at 44% 52%, #f3eed0 92%, transparent 96%), radial-gradient(circle at 74% 28%, #e3a184 8%, transparent 9%), linear-gradient(168deg, transparent 62%, #b9c98f 62%, #b9c98f 70%, transparent 70%), repeating-linear-gradient(180deg, #faf6e2 0 9px, #5b4a3a 9px 10px, #f3eed0 10px 13px), #f3eed0",
       "thumbSource": "custom",
@@ -1413,64 +1249,14 @@
           "name": "Landscape",
           "params": [
             {
-              "key": "spread",
-              "label": "Area around icons",
-              "min": 40,
-              "max": 160,
-              "step": 1,
-              "default": 80,
-              "unit": "px"
-            },
-            {
-              "key": "detail",
-              "label": "Detail density",
-              "min": 0,
-              "max": 1,
-              "step": 0.01,
-              "default": 0.68,
-              "format": "percent"
-            },
-            {
-              "key": "speed",
-              "label": "Animation speed",
-              "min": 0,
-              "max": 3,
-              "step": 0.05,
-              "default": 1,
-              "format": "times"
-            }
-          ]
-        },
-        {
-          "name": "Lighting",
-          "params": [
-            {
-              "key": "lighting",
-              "label": "Lighting",
+              "key": "variant",
+              "label": "Style",
               "options": [
-                "Day",
-                "Night",
-                "Automatic"
+                "Classic",
+                "Colourful"
               ],
               "default": 0
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "citymap",
-      "name": "Colorful City",
-      "desc": "An illustrated city map with red roofs and yellow, pink and blue walls; your icons sit in the squares",
-      "status": "ready",
-      "thumb": "url(thumbs/colorful%20city.webp?v=501e0d3db3) center / cover no-repeat, radial-gradient(ellipse 22% 20% at 40% 54%, #f4f1ea 92%, transparent 96%), repeating-linear-gradient(90deg, #d9493a 0 13px, #f4f1ea 13px 16px, #e8654c 16px 27px, #f4f1ea 27px 30px), repeating-linear-gradient(0deg, #f3c63f 0 3px, #d9493a 3px 16px, #f4f1ea 16px 19px), #f4f1ea",
-      "thumbSource": "custom",
-      "adaptive": true,
-      "page": "landscape.html?theme=citymap",
-      "groups": [
-        {
-          "name": "Landscape",
-          "params": [
+            },
             {
               "key": "spread",
               "label": "Area around icons",
@@ -1506,11 +1292,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1565,11 +1347,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1624,11 +1402,7 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
@@ -1682,16 +1456,50 @@
             {
               "key": "lighting",
               "label": "Lighting",
-              "options": [
-                "Day",
-                "Night",
-                "Automatic"
-              ],
+              "options": ["Day", "Night", "Automatic"],
               "default": 0
             }
           ]
         }
       ]
     }
-  ]
+  ],
+  "aliases": {
+    "community-sky": {
+      "id": "living-sky",
+      "params": {
+        "variant": 0
+      }
+    },
+    "sky": {
+      "id": "living-sky",
+      "params": {
+        "variant": 1
+      },
+      "rename": {
+        "spread": "sigma"
+      }
+    },
+    "ocean": {
+      "id": "living-sky",
+      "params": {
+        "variant": 2
+      },
+      "rename": {
+        "spread": "sigma"
+      }
+    },
+    "pinkforest": {
+      "id": "forest",
+      "params": {
+        "palette": 1
+      }
+    },
+    "citymap": {
+      "id": "map",
+      "params": {
+        "variant": 1
+      }
+    }
+  }
 }

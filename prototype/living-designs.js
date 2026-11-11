@@ -4,12 +4,12 @@
 const query = new URLSearchParams(location.search);
 const WALL = query.has('wallpaper');
 const PREVIEW = query.has('preview');
-const STYLE = { lagoon: 0, sky: 1, colors: 2, openSky: 3 }[document.body.dataset.design] ?? 0;
+const STYLE = { lagoon: 0, sky: 1, colors: 2 }[document.body.dataset.design] ?? 0;
 const cv = document.getElementById('art');
 const gl = cv.getContext('webgl2', { antialias: false, alpha: false });
 const TASKBAR = 48, GRID_X0 = 4, GRID_Y0 = 6, CELL_W = 76, CELL_H = 100;
 const DEFAULTS = {
-  sigma: STYLE === 3 ? 72 : 95, speed: 1, detail: STYLE === 3 ? 0.3 : 0.65,
+  sigma: 95, speed: 1, detail: 0.65,
   palette: 0, adaptive: 1, seed: 42, lighting: 0
 };
 const P = { ...DEFAULTS };
@@ -27,8 +27,8 @@ void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Posit
 const FS=`#version 300 es
 precision highp float;
 uniform sampler2D uA,uB;
-uniform vec2 uRes;
-uniform float uScale,uTime,uMix,uDetail,uSeed;
+uniform vec2 uRes,uScale;
+uniform float uTime,uMix,uDetail,uSeed;
 uniform int uStyle,uPalette;
 uniform vec3 uSunShadow,uSunLight;
 out vec4 o;
@@ -38,7 +38,7 @@ float fbm(vec2 p){return noise(p)*.57+noise(p*2.03)*.28+noise(p*4.11)*.15;}
 float field(vec2 p){vec2 uv=clamp(p/uRes,vec2(0),vec2(1));return mix(texture(uA,uv).r,texture(uB,uv).r,uMix);}
 float shape(vec2 p){vec2 warp=vec2(fbm(p*.006),fbm(p*.006+47.))*2.-1.;return field(p+warp*28.);}
 void main(){
- vec2 p=vec2(gl_FragCoord.x,uRes.y*uScale-gl_FragCoord.y)/uScale;
+ vec2 p=vec2(gl_FragCoord.x,uRes.y*uScale.y-gl_FragCoord.y)/uScale;
  vec2 uv=p/uRes;float t=uTime;
  float grain=(hash(p)-.5)*.009;
  float f=shape(p);
@@ -66,6 +66,7 @@ void main(){
    // Cloud banks follow icons. Smaller independent wisps cross the open sky.
    vec3 top=uPalette==1?vec3(.27,.26,.56):vec3(.12,.40,.73);
    vec3 bottom=uPalette==1?vec3(.93,.59,.52):vec3(.45,.73,.91);
+   if(uPalette==2){top=vec3(.04,.09,.22);bottom=vec3(.17,.28,.46);}
    col=mix(top,bottom,uv.y*.75);
    float wisps=fbm(vec2(p.x*.002-t*.012,p.y*.004));
    float drift=smoothstep(.64,.86,wisps)*uDetail*.46;
@@ -77,19 +78,8 @@ void main(){
    float billow=fbm(p*.014+vec2(t*.007,0));
    float rim=clamp((shape(p-uSunShadow.xy*10.)-f)*3.,0.,1.);
    vec3 cloud=mix(vec3(.76,.85,.93),vec3(.99,.99,.97),billow*.65+.3-rim*.25);
-   col=mix(col,cloud,clouds);
- }else if(uStyle==3){
-   // Open sky with bright cloud banks and independent drifting clouds.
-   vec3 top=vec3(.09,.39,.72),bottom=vec3(.48,.75,.96);
-   if(uPalette==1){top=vec3(.26,.27,.58);bottom=vec3(.96,.55,.38);}
-   if(uPalette==2){top=vec3(.04,.09,.22);bottom=vec3(.17,.28,.46);}
-   col=mix(top,bottom,uv.y);
-   float drift=fbm(p*vec2(.003,.007)+vec2(-t*.022,0.));
-   float edges=(fbm(p*.025+vec2(t*.008,0.))-.5)*.14;
-   float cover=max(smoothstep(.23,.37,f+edges),smoothstep(.62,.83,drift)*uDetail);
-   vec3 cloud=mix(vec3(.71,.83,.95),vec3(.99,1.,1.),fbm(p*.023));
    if(uPalette==2)cloud*=vec3(.44,.54,.68);
-   col=mix(col,cloud,cover);
+   col=mix(col,cloud,clouds);
  }else{
    // Liquid colour: two organic surfaces; four deliberately different palettes.
    vec3 a=vec3(.045,.24,.29),b=vec3(.65,.81,.70);
@@ -186,7 +176,7 @@ function applySettings(values) {
   const previousSigma = P.sigma, previousAdaptive = P.adaptive;
   const limits = {
     sigma: [35, 180], speed: [0, 3], detail: [0, 1],
-    palette: [0, STYLE === 2 ? 3 : STYLE === 3 ? 2 : 1],
+    palette: [0, STYLE === 2 ? 3 : STYLE === 1 ? 2 : 1],
     adaptive: [0, 1], lighting: [0, 2], seed: [0, Number.MAX_SAFE_INTEGER]
   };
   for (const [key, [minimum, maximum]] of Object.entries(limits)) {
@@ -206,8 +196,8 @@ function draw(now) {
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, textures[1]);
   gl.uniform1i(uniforms.uB, 1);
-  gl.uniform2f(uniforms.uRes, cv.width / cv._scale, cv.height / cv._scale);
-  gl.uniform1f(uniforms.uScale, cv._scale);
+  gl.uniform2f(uniforms.uRes, W, H);
+  gl.uniform2f(uniforms.uScale, cv.width / W, cv.height / H);
   gl.uniform1f(uniforms.uTime, animationTime);
   gl.uniform1f(uniforms.uMix, mixAmount(now));
   gl.uniform1f(uniforms.uDetail, P.detail);
