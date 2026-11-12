@@ -38,7 +38,7 @@ $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', '
     'docs\images\beach.webp', 'docs\images\meadow.webp', 'docs\images\maldives.webp')
 $themeFiles = @('flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'serve.ps1', 'themes.json',
     'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js', 'environment.js', 'community-effects.js', 'living-designs.js', 'woodland.js', 'landscape.js',
-    'locations.js', 'kelp.js',
+    'locations.js', 'kelp.js', 'kelp-seabed.js',
     'i18n\en.json', 'i18n\nl.json',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
     'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png',

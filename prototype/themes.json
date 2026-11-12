@@ -341,7 +341,7 @@
             },
             {
               "key": "wildlife",
-              "label": "Jellyfish and turtles",
+              "label": "Jellyfish, turtles and crabs",
               "options": ["Off", "On"],
               "default": 1
             },

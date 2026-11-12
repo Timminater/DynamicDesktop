@@ -27,8 +27,8 @@
     text-decoration: none; background: #082b43a8; cursor: pointer; }
   #demo select { color-scheme: dark; }
   #demo button:hover, #demo a:hover { background: #1b5067; }
-  #demo #reefDive, #demo #wakePass { background: #155565; border-color: #6ad0d88a; }
-  #demo #reefDive:hover, #demo #wakePass:hover { background: #1c6979; }
+  #demo #nightDive, #demo #wreckDive, #demo #wakePass { background: #155565; border-color: #6ad0d88a; }
+  #demo #nightDive:hover, #demo #wreckDive:hover, #demo #wakePass:hover { background: #1c6979; }
   #demoHint { flex-basis: 100%; text-align: right; color: #b5cedd; }
 </style>
 </head>
@@ -47,7 +47,8 @@
     <option value="2">Automatic</option>
   </select>
   <span id="modelName" role="status"></span>
-  <button type="button" id="reefDive"></button>
+  <button type="button" id="nightDive"></button>
+  <button type="button" id="wreckDive"></button>
   <button type="button" id="wakePass"></button>
   <button type="button" id="nextVessel"></button>
   <button type="button" id="resetIcons"></button>
@@ -55,6 +56,7 @@
   <span id="demoHint"></span>
 </nav>
 <script src="environment.js"></script>
+<script src="kelp-seabed.js"></script>
 <script src="kelp.js"></script>
 <script src="community-effects.js"></script>
 <script src="share.js"></script>
