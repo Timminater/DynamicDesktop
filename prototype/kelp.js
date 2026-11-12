@@ -139,8 +139,8 @@ function seabed(x) {
 
 function distantRidges(paint, night) {
   const layers = [
-    { level: .83, height: .22, phase: 1.3, color: night ? '#12334b55' : '#38748a3d' },
-    { level: .91, height: .19, phase: 3.9, color: night ? '#071d31af' : '#1c4c628c' }
+    { level: .83, height: .22, phase: 1.3, color: night ? '#12334b55' : '#448c9e55' },
+    { level: .91, height: .19, phase: 3.9, color: night ? '#071d31af' : '#20596d86' }
   ];
   for (const { level, height, phase, color } of layers) {
     paint.fillStyle = color;
@@ -166,13 +166,13 @@ function cacheBackdrop() {
     const paint = canvas.getContext('2d', { alpha: false });
     paint.scale(canvas.width / W, canvas.height / H);
     const water = paint.createLinearGradient(0, 0, W * .45, H);
-    water.addColorStop(0, night ? '#0b263e' : '#124564');
-    water.addColorStop(.55, night ? '#071c32' : '#103b5a');
-    water.addColorStop(1, night ? '#030f20' : '#0a2d47');
+    water.addColorStop(0, night ? '#0b263e' : '#3689ab');
+    water.addColorStop(.55, night ? '#071c32' : '#277493');
+    water.addColorStop(1, night ? '#030f20' : '#18516d');
     paint.fillStyle = water;
     paint.fillRect(0, 0, W, H);
     const glow = paint.createRadialGradient(W * .18, H * .19, 0, W * .18, H * .19, Math.max(W, H) * .66);
-    glow.addColorStop(0, night ? '#385f9c22' : '#297c9324');
+    glow.addColorStop(0, night ? '#385f9c22' : '#8ce3e651');
     glow.addColorStop(1, '#297c9300');
     paint.fillStyle = glow;
     paint.fillRect(0, 0, W, H);
@@ -1371,7 +1371,7 @@ function draw(now) {
     ctx.globalAlpha = 1;
   }
   ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
-  ctx.fillStyle = shade('#092637', '#040f1e');
+  ctx.fillStyle = shade('#1d4650', '#040f1e');
   ctx.fill(floor);
   const wreck = wreckAt(pass);
   if (wreck) {
