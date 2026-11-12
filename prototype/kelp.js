@@ -10,10 +10,9 @@ const iconLayer = document.getElementById('icons');
 const TASKBAR = 48, GRID_X0 = 4, GRID_Y0 = 6, CELL_W = 76, CELL_H = 100;
 const KELP = 0, REEF = 1, SILT = 2;
 const DEFAULTS = { adaptive: 1, seed: 42, landscape: KELP, lighting: 0, kelpDensity: 0.64,
-  current: 0.8, vessel: 0, interval: 55, fish: 1, wildlife: 1, bubbles: 5 };
+  current: 0.8, submersible: 0, interval: 55, fish: 1, wildlife: 1, bubbles: 5 };
 const P = { ...DEFAULTS };
 const models = [
-  { id: 'cruise-sub', name: 'Cruise Sub 7', scale: .94 },
   { id: 'super-sub', name: 'Super Sub', scale: 1 },
   { id: 'nemo', name: 'NEMO', scale: .74 },
   { id: 'c-explorer', name: 'C-Explorer', scale: .81 },
@@ -30,8 +29,11 @@ let backdrop, floor, paused = false, previewMotion = !PREVIEW, hostDragging = fa
 let nightAmount = 0, nightTarget = 0, nextLightCheck = 0;
 let animationTime = 0, lastFrame = 0, frameN = 0, nextModel = 0;
 let pass, previousWake, nextPassAt = 2 + Math.random() * 4;
-let nextNightDiveAt = 150 + Math.random() * 90;
-let nightDiveCount = 0, bottomDetails, crabPass, nextCrabAt = 18 + Math.random() * 18;
+let nextSceneAt = 95 + Math.random() * 55;
+let bottomDetails, crabPass, nextCrabAt = 18 + Math.random() * 18;
+let requestedScene, diverPass;
+const emptyClickTimes = [];
+const SCENE_FADE = 2.3;
 let wildlifePointer = null, wildlifeClick = null, nextSteeringCleanup = 0;
 const animalSteering = new Map();
 const noSteering = { x: 0, y: 0, vx: 0, vy: 0 };
@@ -52,6 +54,21 @@ function pointWildlife(x, y, clicked = false) {
   }
   wildlifePointer = { x, y };
   if (clicked && !paused && previewMotion) wildlifeClick = { x, y, at: animationTime };
+}
+
+function countDesktopClick(x, y, now = performance.now()) {
+  if (requestedScene || paused || !previewMotion) return;
+  const overIcon = icons.some(icon => x >= icon.x && x <= icon.x + icon.w && y >= icon.y && y <= icon.y + icon.h);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x >= W || y < 0 || y >= H || overIcon) {
+    emptyClickTimes.length = 0;
+    return;
+  }
+  while (emptyClickTimes.length && now - emptyClickTimes[0] > 2500) emptyClickTimes.shift();
+  emptyClickTimes.push(now);
+  if (emptyClickTimes.length === 5) {
+    emptyClickTimes.length = 0;
+    queueDesktopScene(desktopScenes[Math.floor(Math.random() * desktopScenes.length)]);
+  }
 }
 
 const turtleSteering = { speed: 19, acceleration: 24 };
@@ -126,6 +143,13 @@ function updateLighting(now, snap = false) {
     nextLightCheck = now + 1000;
   }
   const previous = nightAmount;
+  if (requestedScene?.scene.lighting != null) {
+    const { restoreAt, from, queuedAt, startAt } = requestedScene;
+    const target = requestedScene.scene.lighting;
+    nightAmount = restoreAt == null ? lerp(from, target, smooth((animationTime - queuedAt) / (startAt - queuedAt)))
+      : lerp(target, nightTarget, smooth((animationTime - restoreAt) / SCENE_FADE));
+    return nightAmount !== previous;
+  }
   const step = Math.min(now - lastFrame, 100) / 6000;
   nightAmount = snap || !lastFrame || Math.abs(nightTarget - nightAmount) <= step
     ? nightTarget : nightAmount + Math.sign(nightTarget - nightAmount) * step;
@@ -569,7 +593,17 @@ function fishSteering(x, y, side, velocity, schoolAge, interaction) {
   };
 }
 
-function drawFish(interaction) {
+function fishingCuriosity(x, y, fishing) {
+  const dx = fishing.hookX - x, dy = fishing.hookY - y;
+  const distance = Math.hypot(dx, dy);
+  const radius = clamp(Math.min(W, H) * .2, 65, 145);
+  if (distance <= 23 || distance >= radius) return noSteering;
+  const proximity = 1 - smooth((distance - radius * .45) / (radius * .55));
+  const pull = Math.min(distance - 23, 42) * proximity * fishing.interest / distance;
+  return { x: dx * pull, y: dy * pull };
+}
+
+function drawFish(interaction, fishing) {
   for (let school = 0; school < P.fish; school++) {
     const clock = animationTime / (50 + school * 9) + school * .37;
     const cycle = Math.floor(clock), phase = clock - cycle;
@@ -597,15 +631,17 @@ function drawFish(interaction) {
       const y = depth + side * (3 + random(i, key + 16) * 16) + Math.sin(animationTime * .8 + i * .7) * 3;
       const motion = fishSteering(x, y, side, direction * speed, schoolAge, interaction);
       const size = (featured ? 1.24 : 1) * (species === 1 ? 1.27 : 1) * (4.5 + random(i, key + 17) * 2);
-      const evasion = cursorAvoidance(`fish:${school}:${featured ? route.startsAt : cycle}:${i}`, motion.x, motion.y, 74, side);
+      const curiosity = fishing?.interest > 0 && random(i, key + 18) < .62 ? fishingCuriosity(motion.x, motion.y, fishing) : noSteering;
+      const fishX = motion.x + curiosity.x, fishY = motion.y + curiosity.y;
+      const evasion = cursorAvoidance(`fish:${school}:${featured ? route.startsAt : cycle}:${i}`, fishX, fishY, 74, side);
       const swimmingX = direction * speed + evasion.vx;
       const facing = Math.abs(swimmingX) > 12 ? Math.sign(swimmingX) : direction;
-      const turning = Math.atan2(evasion.vy, Math.abs(swimmingX) + 12);
+      const turning = Math.atan2(evasion.vy, Math.abs(swimmingX) + 12) + curiosity.y * .012;
       const flick = Math.sin(animationTime * 5 + i) + motion.pressure * .5 * Math.sin(animationTime * 12 + i);
       const tail = -size * (1.55 + flick * .18);
       const bodyDepth = size * [.38, .65, .21][species];
       ctx.save();
-      ctx.translate(motion.x + evasion.x, motion.y + evasion.y);
+      ctx.translate(fishX + evasion.x, fishY + evasion.y);
       ctx.scale(facing, 1);
       ctx.rotate(clamp(motion.pitch + turning, -1.25, 1.25));
       ctx.beginPath();
@@ -630,79 +666,80 @@ function drawFish(interaction) {
 }
 
 function drawMantaRay(x, y, size, direction, time, opacity) {
-  const stroke = time * 1.15;
-  const upper = Math.sin(stroke) * .075;
-  const lower = Math.sin(stroke - .48) * .09;
-  const tailWave = Math.sin(stroke - 1.15) * .045;
+  const lift = Math.sin(time * 1.05);
+  const farLift = Math.sin(time * 1.05 - .35);
+  const tailWave = Math.sin(time * .8 - 1) * .025;
   ctx.save();
   ctx.translate(x, y + Math.sin(time * .48) * size * .015);
   ctx.scale(direction * size, size);
-  ctx.rotate(Math.sin(time * .57) * .025);
+  ctx.rotate(Math.sin(time * .57) * .018);
   ctx.globalAlpha *= opacity;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // The far wing rises behind the body; its tip lags the near wing.
-  ctx.beginPath();
-  ctx.moveTo(.16, -.055);
-  ctx.bezierCurveTo(.06, -.12, -.03, -.27 + upper * .35, -.24, -.35 + upper);
-  ctx.bezierCurveTo(-.31, -.37 + upper, -.34, -.35 + upper, -.30, -.30 + upper);
-  ctx.bezierCurveTo(-.23, -.22 + upper * .8, -.20, -.10, -.17, .005);
-  ctx.closePath();
-  ctx.fillStyle = '#263f4a';
-  ctx.fill();
-
-  // A slender tail follows the body with a delayed, gentle bend.
+  // The thin tail emerges from the rear of the disc.
   ctx.beginPath();
   ctx.moveTo(-.22, .025);
-  ctx.bezierCurveTo(-.40, .035, -.55, .035 + tailWave * .4, -.78, .07 + tailWave);
-  ctx.strokeStyle = '#1b3038';
-  ctx.lineWidth = .015;
+  ctx.bezierCurveTo(-.42, .035, -.60, .045 + tailWave * .4, -.86, .07 + tailWave);
+  ctx.strokeStyle = '#4c666d';
+  ctx.lineWidth = .007;
   ctx.stroke();
 
-  const body = ctx.createLinearGradient(0, -.16, 0, .30);
-  body.addColorStop(0, '#64828a');
-  body.addColorStop(.35, '#354f59');
-  body.addColorStop(1, '#1b343e');
+  // The two wings and body form one flattened disc seen from above and to the side.
+  const farTip = -.34 + farLift * .045, nearTip = .44 + lift * .055;
+  const body = ctx.createLinearGradient(0, farTip, -.08, nearTip);
+  body.addColorStop(0, '#2c4650');
+  body.addColorStop(.42, '#56737b');
+  body.addColorStop(.68, '#3c5962');
+  body.addColorStop(1, '#29424c');
   ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.moveTo(.32, -.045);
-  ctx.bezierCurveTo(.23, -.11, .06, -.11, -.10, -.07);
-  ctx.bezierCurveTo(-.22, -.04, -.29, .015, -.24, .07);
-  ctx.bezierCurveTo(-.22, .14, -.27, .25 + lower * .65, -.39, .37 + lower);
-  ctx.bezierCurveTo(-.41, .40 + lower, -.37, .41 + lower, -.33, .39 + lower);
-  ctx.bezierCurveTo(-.12, .31 + lower * .8, .02, .18, .12, .09);
-  ctx.bezierCurveTo(.23, .085, .30, .055, .34, .015);
-  ctx.bezierCurveTo(.36, -.005, .36, -.025, .32, -.045);
+  ctx.moveTo(.33, -.048);
+  ctx.bezierCurveTo(.22, -.115, .09, -.09, -.02, -.18);
+  ctx.bezierCurveTo(-.13, -.25, -.17, farTip * .91, -.27, farTip);
+  ctx.quadraticCurveTo(-.303, farTip - .012, -.295, farTip + .028);
+  ctx.bezierCurveTo(-.26, -.19, -.20, -.09, -.29, .022);
+  ctx.quadraticCurveTo(-.31, .045, -.29, .067);
+  ctx.bezierCurveTo(-.23, .19, -.28, nearTip * .76, -.34, nearTip - .025);
+  ctx.quadraticCurveTo(-.35, nearTip + .018, -.31, nearTip);
+  ctx.bezierCurveTo(-.13, nearTip * .84, .04, .20, .13, .12);
+  ctx.bezierCurveTo(.24, .09, .30, .072, .34, .029);
+  ctx.quadraticCurveTo(.36, -.014, .33, -.048);
   ctx.closePath();
   ctx.fill();
 
-  // Paired cephalic lobes frame the broad, forward-facing mouth.
-  ctx.fillStyle = '#344e58';
+  // Short paired cephalic lobes frame the wide front of the mouth.
+  ctx.fillStyle = '#415e67';
   ctx.beginPath();
-  ctx.moveTo(.27, -.045);
-  ctx.quadraticCurveTo(.35, -.09, .39, -.07);
-  ctx.quadraticCurveTo(.40, -.05, .33, -.018);
+  ctx.moveTo(.27, -.035);
+  ctx.quadraticCurveTo(.34, -.085, .39, -.065);
+  ctx.quadraticCurveTo(.40, -.045, .34, -.012);
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.moveTo(.29, .035);
-  ctx.quadraticCurveTo(.37, .065, .39, .045);
-  ctx.quadraticCurveTo(.40, .025, .34, .005);
+  ctx.moveTo(.28, .045);
+  ctx.quadraticCurveTo(.35, .075, .39, .05);
+  ctx.quadraticCurveTo(.39, .03, .34, .012);
   ctx.closePath();
   ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(.33, -.012);
+  ctx.quadraticCurveTo(.35, .002, .34, .012);
+  ctx.strokeStyle = '#1d343c';
+  ctx.lineWidth = .012;
+  ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(.18, -.075);
-  ctx.bezierCurveTo(.04, -.095, -.13, -.065, -.20, -.025);
-  ctx.moveTo(-.22, .065);
-  ctx.bezierCurveTo(-.19, .17, -.28, .29 + lower * .7, -.36, .375 + lower);
-  ctx.strokeStyle = 'rgba(157, 194, 198, .38)';
-  ctx.lineWidth = .008;
+  ctx.moveTo(.17, -.065);
+  ctx.bezierCurveTo(.03, -.085, -.14, -.045, -.22, .015);
+  ctx.moveTo(.13, .10);
+  ctx.bezierCurveTo(.02, .17, -.15, nearTip * .78, -.30, nearTip - .009);
+  ctx.strokeStyle = 'rgba(170, 201, 201, .28)';
+  ctx.lineWidth = .007;
   ctx.stroke();
   ctx.beginPath();
-  ctx.ellipse(.235, -.026, .008, .006, 0, 0, TAU);
-  ctx.fillStyle = '#152a32';
+  ctx.ellipse(.235, -.027, .007, .005, 0, 0, TAU);
+  ctx.fillStyle = '#192f37';
   ctx.fill();
   ctx.restore();
 }
@@ -829,6 +866,90 @@ function drawWildlife() {
   ctx.restore();
 }
 
+function drawScubaDiver(x, y, direction, pitch, size, elapsed, opacity) {
+  ctx.save();
+  const alpha = ctx.globalAlpha * opacity;
+
+  // Exhaled bubbles drift upward and trail behind the swimmer in screen space.
+  ctx.strokeStyle = shade('#b6e3e7', '#7caebf');
+  ctx.lineWidth = Math.max(.6, size * .009);
+  for (let i = 0; i < 7; i++) {
+    const age = (elapsed * .38 + i / 7) % 1;
+    const bx = x + direction * size * (.32 - age * .48 + .025 * Math.sin(i * 4 + age * 8));
+    const by = y - size * (.03 + age * .58);
+    ctx.globalAlpha = alpha * .48 * Math.min(1, age * 8, (1 - age) * 4);
+    ctx.beginPath();
+    ctx.arc(bx, by, size * (.012 + age * .009), 0, TAU);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.scale(direction * size, size);
+  ctx.rotate(pitch);
+  const kick = Math.sin(elapsed * 4.2);
+
+  // Legs and fins bend independently to suggest a relaxed flutter kick.
+  function leg(offset, motion, color) {
+    const kneeY = offset + motion * .035;
+    const footY = offset + motion * .075;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = .065;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-.12, offset);
+    ctx.lineTo(-.27, kneeY);
+    ctx.lineTo(-.39, footY);
+    ctx.stroke();
+    ctx.fillStyle = shade('#172e38', '#10232e');
+    ctx.beginPath();
+    ctx.moveTo(-.38, footY - .025);
+    ctx.quadraticCurveTo(-.48, footY - .025 + motion * .025, -.53, footY - .045 + motion * .04);
+    ctx.lineTo(-.52, footY + .015 + motion * .04);
+    ctx.quadraticCurveTo(-.46, footY + .035, -.38, footY + .025);
+    ctx.fill();
+  }
+  leg(-.02, -kick, shade('#233e48', '#182e39'));
+  leg(.035, kick, shade('#31515b', '#213a46'));
+
+  // Tank and harness sit above the streamlined suit.
+  ctx.fillStyle = shade('#a8c5bf', '#688b8d');
+  ctx.beginPath();
+  ctx.roundRect(-.16, -.13, .34, .09, .035);
+  ctx.fill();
+  ctx.fillStyle = shade('#2e535a', '#203b47');
+  ctx.fillRect(-.09, -.13, .035, .09);
+  ctx.fillRect(.08, -.13, .035, .09);
+  ctx.fillStyle = shade('#254750', '#1a333e');
+  ctx.beginPath();
+  ctx.ellipse(.015, -.005, .21, .075, -.04, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = shade('#416975', '#294a58');
+  ctx.lineWidth = .047;
+  ctx.beginPath();
+  ctx.moveTo(.07, .025);
+  ctx.quadraticCurveTo(.15, .10, .25, .065);
+  ctx.lineTo(.33, .025);
+  ctx.stroke();
+
+  ctx.fillStyle = shade('#294952', '#1b3540');
+  ctx.beginPath();
+  ctx.arc(.25, -.035, .067, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = shade('#a8d7d8', '#6a9fae');
+  ctx.beginPath();
+  ctx.roundRect(.265, -.065, .065, .039, .012);
+  ctx.fill();
+  ctx.strokeStyle = shade('#b4d3cd', '#73999c');
+  ctx.lineWidth = .012;
+  ctx.beginPath();
+  ctx.moveTo(.17, -.10);
+  ctx.quadraticCurveTo(.24, -.15, .31, -.025);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawBubbles() {
   ctx.lineWidth = .8;
   for (let i = 0; i < P.bubbles; i++) {
@@ -845,7 +966,7 @@ function drawBubbles() {
 }
 
 function modelWidth(model) {
-  return clamp(W * .067, 57, 126) * model.scale;
+  return clamp(W * .094, 132, 178) * model.scale;
 }
 
 function setVesselPass(route) {
@@ -884,14 +1005,14 @@ function beginPass(still = false) {
     if (!pass) nextPassAt = animationTime + 2 + Math.random() * 3;
     return;
   }
-  const index = P.vessel ? P.vessel - 1 : nextModel;
+  const index = P.submersible ? P.submersible - 1 : nextModel;
   if (!still) nextModel = (index + 1) % models.length;
   const direction = start.x < .24 ? 1 : start.x > .76 ? -1 : Math.random() < .5 ? -1 : 1;
   const distance = direction === 1 ? 1 - start.x : start.x;
   const changeDepth = Math.random() < .72;
   const depth = changeDepth ? (Math.random() < .5 ? -1 : 1) * (.045 + Math.random() * .13) : 0;
   setVesselPass({
-    index, start, direction, startsAt: animationTime, still,
+    index, start, direction, startsAt: animationTime, still, emergenceX: start.x,
     duration: (distance + .06) / (.031 + Math.random() * .014),
     endDepth: clamp(start.y + depth, .15, .88),
     drift: (Math.random() - .5) * (changeDepth ? .08 : .014),
@@ -934,7 +1055,7 @@ function siltDiveEntries(now) {
   });
 }
 
-function beginNightDive() {
+function beginNightDive(onRequest = false) {
   const now = performance.now();
   const candidates = P.landscape === REEF ? reefDiveEntries()
     : P.landscape === KELP ? kelpDiveEntries(now) : siltDiveEntries(now);
@@ -949,18 +1070,19 @@ function beginNightDive() {
     return openWater(x, y) && openWater(edge + direction * Math.min(W * .08, 94), y);
   });
   clear.sort((a, b) => room(b) + b.quality - room(a) - a.quality);
-  const entry = clear[0];
+  const direction = Math.random() < .5 ? -1 : 1;
+  const entry = clear[0] || (onRequest ? { x: W * (direction > 0 ? .06 : .94), y: H * .60, direction } : null);
   if (!entry) return false;
-  const index = DEMO || !P.vessel ? 1 : P.vessel - 1;
+  const index = DEMO || !P.submersible ? 0 : P.submersible - 1;
   const startDepth = entry.y / H;
   const rise = P.landscape === KELP ? .28 : P.landscape === SILT ? .13 : .22;
   setVesselPass({
     index, start: { x: entry.x / W, y: startDepth }, direction: entry.direction, startsAt: animationTime,
     duration: 23, endDepth: P.landscape === REEF ? clamp(startDepth - rise, .22, .62) : Math.max(.14, startDepth - rise),
     drift: .045, cinematic: true, landscape: P.landscape,
+    emergenceX: entry.edge === undefined ? undefined : entry.edge / W,
     far: .57, near: 1.31, seed: Math.floor(Math.random() * 10000)
   });
-  nextNightDiveAt = animationTime + 180 + Math.random() * 135;
   if (DEMO) document.getElementById('modelName').textContent = models[index].name;
   return true;
 }
@@ -975,26 +1097,31 @@ function wreckAt(route) {
     const x = route.wreck.x * W;
     route.wreck.width = W;
     route.wreck.height = H;
-    route.wreck.art = KelpSeabed.buildWreck(x, seabed(x), wreckWidth());
+    route.wreck.art = KelpSeabed.buildWreck(x, seabed(x), wreckWidth() * route.wreck.scale);
   }
   return route.wreck.art;
 }
 
-function beginWreckDive() {
-  const halfWidth = wreckWidth() * .54;
+function beginWreckDive(onRequest = false) {
   const places = [.50, .61, .39, .70, .30];
-  const site = places.find(fraction => {
+  let scale = 1;
+  function blocked(fraction) {
+    const halfWidth = wreckWidth() * scale * .54;
     const x = fraction * W, top = seabed(x) - halfWidth;
-    return !clusters.some(group => group.bottom >= top && group.left < x + halfWidth && group.right > x - halfWidth);
-  });
+    return clusters.some(group => group.bottom >= top && group.left < x + halfWidth && group.right > x - halfWidth);
+  }
+  let site = places.find(fraction => !blocked(fraction));
+  if (site == null && onRequest) {
+    scale = .68;
+    site = [...places, .80, .20].find(fraction => !blocked(fraction)) ?? .50;
+  }
   if (site == null) return false;
   const direction = site > .5 ? 1 : site < .5 ? -1 : Math.random() < .5 ? 1 : -1;
-  const index = DEMO || !P.vessel ? 1 : P.vessel - 1;
+  const index = DEMO || !P.submersible ? 0 : P.submersible - 1;
   const floorDepth = seabed(site * W) / H;
   setVesselPass({ index, start: { x: site - direction * .34, y: floorDepth - .20 }, direction, startsAt: animationTime,
     duration: 23, endDepth: floorDepth - .12, drift: -.045, cinematic: true, landscape: P.landscape,
-    far: .66, near: 1.21, seed: Math.floor(Math.random() * 10000), wreck: { x: site } });
-  nextNightDiveAt = animationTime + 180 + Math.random() * 135;
+    far: .66, near: 1.21, seed: Math.floor(Math.random() * 10000), wreck: { x: site, scale } });
   if (DEMO) document.getElementById('modelName').textContent = models[index].name;
   return true;
 }
@@ -1035,17 +1162,171 @@ function drawBottom() {
   if (nearShelter) bottomDetails.draw(ctx, nightAmount);
 }
 
-function beginWakeDemo() {
+function beginWakePass() {
   const group = [...landscapeGroups()].sort((a, b) => a.left - b.left)[0];
   const direction = (group.left + group.right) * .5 < W * .5 ? 1 : -1;
   const edge = direction > 0 ? group.right : group.left;
   const x = clamp(edge - direction * 20, W * .035, W * .965);
   const y = clamp((group.top + group.bottom) * .5 / H, .22, .75);
   setVesselPass({
-    index: 1, start: { x: x / W, y }, direction, startsAt: animationTime, duration: 18,
-    endDepth: clamp(y + .09, .25, .82), drift: -.015, showcase: true, far: .92, near: 1.16, seed: 91
+    index: DEMO || !P.submersible ? 0 : P.submersible - 1, start: { x: x / W, y }, direction, startsAt: animationTime, duration: 18,
+    endDepth: clamp(y + .09, .25, .82), drift: -.015, showcase: true, far: .92, near: 1.16, seed: 91,
+    emergenceX: edge / W
   });
-  document.getElementById('modelName').textContent = models[pass.index].name;
+  if (DEMO) document.getElementById('modelName').textContent = models[pass.index].name;
+}
+
+function beginDiverPass() {
+  diverPass = { startsAt: animationTime, duration: 22, direction: Math.random() < .5 ? -1 : 1,
+    lane: .45 + Math.random() * .17 };
+}
+
+const desktopScenes = [
+  { id: 'night', en: 'Night dive', nl: 'Nachtduik', lighting: 1, start: () => beginNightDive(true) },
+  { id: 'wreck', en: 'Wreck dive', nl: 'Wrakduik', lighting: 1, start: () => beginWreckDive(true) },
+  { id: 'wake', en: 'Wake pass', nl: 'Kielzog', start: beginWakePass },
+  { id: 'diver', en: 'Passing diver', nl: 'Langszwemmende duiker', start: beginDiverPass },
+  { id: 'jellyParade', en: 'Jellyfish parade', nl: 'Kwallenparade', duration: 26, layer: 'water', draw: drawKelpDeepScene },
+  { id: 'subMeeting', en: 'Meeting in the depths', nl: 'Ontmoeting in de diepte', duration: 23, layer: 'water', draw: drawKelpVesselScene },
+  { id: 'whaleEye', en: 'Eye of the whale', nl: 'Het oog van de walvis', duration: 30, layer: 'distant', draw: drawKelpDeepScene },
+  { id: 'deepLure', en: 'Light from the depths', nl: 'Licht uit de diepte', duration: 24, layer: 'water', draw: drawKelpDeepScene, lighting: 1, start: beginDeepLurePass },
+  { id: 'research', en: 'Seabed research', nl: 'Onderzoek bij de bodem', duration: 34, layer: 'bottom', draw: drawKelpVesselScene },
+  { id: 'sunBreak', en: 'Break in the clouds', nl: 'Zonnedoorbraak', duration: 28, layer: 'overlay', draw: drawKelpSurfaceScene, lighting: 0 },
+  { id: 'flatfish', en: 'In the sand', nl: 'In het zand', duration: 16, layer: 'bottom', draw: drawKelpDeepScene },
+  { id: 'dolphins', en: 'Dolphins in the shallows', nl: 'Dolfijnen in de bovenlaag', duration: 23, layer: 'water', draw: drawKelpWildlifeScene, lighting: 0 },
+  { id: 'silverHunt', en: 'Silver hunt', nl: 'Jacht op zilver', duration: 23, layer: 'water', draw: drawKelpWildlifeScene, lighting: 0 },
+  { id: 'boatShadow', en: 'Shadow at the surface', nl: 'Schaduw aan het oppervlak', duration: 20, layer: 'overlay', draw: drawKelpSurfaceScene, lighting: 0 },
+  { id: 'fishingBoat', en: 'Fishing boat', nl: 'Vissersboot met vislijn', duration: 36, layer: 'water', draw: drawKelpSurfaceScene, lighting: 0 }
+];
+
+function queueDesktopScene(scene) {
+  if (requestedScene) {
+    setVesselPass(null);
+    diverPass = null;
+  }
+  const delay = scene.lighting != null && Math.abs(scene.lighting - nightAmount) > .001 ? SCENE_FADE : .55;
+  requestedScene = {
+    scene, from: nightAmount, queuedAt: animationTime, startAt: animationTime + delay,
+    seed: Math.floor(Math.random() * 10000), direction: Math.random() < .5 ? -1 : 1
+  };
+}
+
+function sceneSite(scene) {
+  const depth = scene.id === 'fishingBoat' ? .37 : .84;
+  const candidates = scene.id === 'fishingBoat' ? [.28, .38, .5, .62, .71] : [.5, .62, .38, .71, .29];
+  const margin = Math.min(W * .11, 130);
+  return candidates.find(x => clusters.every(group =>
+    group.top > H * (depth + .14) || group.bottom < H * (depth - .17) ||
+    x * W + margin < group.left || x * W - margin > group.right)) ?? .5;
+}
+
+function deepLureSite(direction) {
+  const surfaces = scenerySurfaces(performance.now(), []);
+  const sx = cv.width / W, sy = cv.height / H;
+  const approach = Math.min(W * .24, 220);
+  let best = { site: .5, depth: .64, direction }, bestScore = -Infinity;
+  ctx.save();
+  ctx.setTransform(sx, 0, 0, sy, 0, 0);
+  for (const site of [.5, .37, .63, .25, .75, .17, .83]) {
+    for (const depth of [.64, .54, .72, .44]) {
+      const x = site * W, y = depth * H;
+      for (const side of [direction, -direction]) {
+        let distance = 0;
+        for (; distance <= approach; distance += 8) {
+          const px = x - side * distance, py = y - distance / approach * H * .075;
+          if (px < 5 || px > W - 5 || surfaces.some(surface =>
+            px >= surface.left && px <= surface.right && py >= surface.top && py <= surface.bottom &&
+            ctx.isPointInPath(surface.path, px * sx, py * sy, surface.rule || 'nonzero')) ||
+            clusters.some(group => px >= group.left - 20 && px <= group.right + 20 &&
+              py >= group.top - 15 && py <= group.bottom + 15)) break;
+        }
+        const score = distance - Math.abs(site - .5) * 26 - Math.abs(depth - .64) * 22 + (side === direction ? 3 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = { site, depth, direction: side };
+        }
+      }
+    }
+  }
+  ctx.restore();
+  return best;
+}
+
+function beginDeepLurePass() {
+  const { scene, site, depth, direction, seed } = requestedScene;
+  const index = P.submersible ? P.submersible - 1 : 0;
+  const lane = depth - .075;
+  setVesselPass({
+    index, start: { x: site - direction * .51, y: lane - .015 }, direction, startsAt: animationTime,
+    duration: scene.duration, endDepth: lane, drift: .005, far: .79, near: .91, seed, lure: true
+  });
+  if (DEMO) document.getElementById('modelName').textContent = models[index].name;
+}
+
+function advanceRequestedScene() {
+  if (!requestedScene) return false;
+  if (requestedScene.restoreAt != null) {
+    if (animationTime - requestedScene.restoreAt >= SCENE_FADE) requestedScene = null;
+    return true;
+  }
+  if (requestedScene.endsAt == null) {
+    if (animationTime < requestedScene.startAt) return true;
+    setVesselPass(null);
+    const { scene } = requestedScene;
+    if (scene.id === 'deepLure') Object.assign(requestedScene, deepLureSite(requestedScene.direction));
+    else requestedScene.site = sceneSite(scene);
+    scene.start?.();
+    requestedScene.endsAt = animationTime + (scene.duration ?? (diverPass || pass).duration);
+    requestedScene.startedAt = animationTime;
+    return true;
+  }
+  if (animationTime < requestedScene.endsAt) return true;
+  setVesselPass(null);
+  diverPass = null;
+  nextPassAt = animationTime + P.interval * (.65 + Math.random() * .7);
+  nextSceneAt = animationTime + 110 + Math.random() * 75;
+  const lighting = requestedScene.scene.lighting;
+  if (lighting != null && Math.abs(nightTarget - lighting) > .001) requestedScene.restoreAt = animationTime;
+  else requestedScene = null;
+  return true;
+}
+
+function drawRequestedDiver() {
+  if (!diverPass) return;
+  const { startsAt, duration, direction, lane } = diverPass;
+  const elapsed = animationTime - startsAt;
+  const t = clamp(elapsed / duration, 0, 1);
+  const size = clamp(W * .089, 94, 184);
+  const x = lerp(direction > 0 ? -size : W + size, direction > 0 ? W + size : -size, t);
+  const y = H * (lane + .055 * Math.sin(t * TAU) - t * .11) + Math.sin(elapsed * 2) * 1.8;
+  const pitch = Math.atan2(H * (.055 * TAU * Math.cos(t * TAU) - .11), W + size * 2);
+  ctx.save();
+  for (const icon of iconOccluders) {
+    if (x + size > icon.left && x - size < icon.right && y + size > icon.top && y - size < icon.bottom) ctx.clip(icon.path, 'evenodd');
+  }
+  drawScubaDiver(x, y, direction, pitch, size, elapsed, smooth(t * 12) * smooth((1 - t) * 10));
+  ctx.restore();
+}
+
+function currentShowcase() {
+  if (requestedScene?.startedAt == null || !requestedScene.scene.draw || requestedScene.restoreAt != null) return null;
+  const { scene, startedAt, site, depth, direction, seed } = requestedScene;
+  const t = animationTime - startedAt;
+  const p = clamp(t / scene.duration, 0, 1);
+  const frame = { scene, id: scene.id, t, p, site, depth, direction, seed, alpha: smooth(p / .13) * smooth((1 - p) / .13) };
+  if (scene.id === 'fishingBoat') frame.fishing = kelpFishingPose(frame, W, H);
+  return frame;
+}
+
+function drawShowcase(showcase, layer, light = null, surfaces = []) {
+  if (!showcase || showcase.scene.layer !== layer || showcase.alpha <= 0) return;
+  ctx.save();
+  if (layer !== 'overlay') {
+    for (const icon of iconOccluders) ctx.clip(icon.path, 'evenodd');
+  }
+  const lights = showcase.scene.draw(showcase, { ctx, W, H, night: nightAmount, seabed, models, modelWidth, light, surfaces }, layer);
+  ctx.restore();
+  return lights;
 }
 
 function advanceVessels() {
@@ -1053,13 +1334,14 @@ function advanceVessels() {
     nextPassAt = pass.startsAt + pass.duration + P.interval * (.65 + Math.random() * .7);
     setVesselPass(null);
   }
-  if (pass || animationTime < nextPassAt) return;
-  if (nightAmount > .82 && animationTime >= nextNightDiveAt) {
-    if ((nightDiveCount % 3 === 2 && beginWreckDive()) || beginNightDive()) {
-      nightDiveCount++;
-      return;
-    }
+  if (pass) return;
+  if ((WALL || DEMO) && animationTime >= nextSceneAt) {
+    const eligible = desktopScenes.filter(({ lighting }) =>
+      lighting == null || (lighting === 1 ? nightAmount > .82 : nightAmount < .18));
+    queueDesktopScene(eligible[Math.floor(Math.random() * eligible.length)]);
+    return;
   }
+  if (animationTime < nextPassAt) return;
   beginPass();
 }
 
@@ -1084,16 +1366,19 @@ function vesselInteraction() {
   function sampleRoute(sampled, until, baseWidth) {
     if (!sampled || sampled.still || animationTime - until >= 6.5) return;
     const endedAt = Math.min(until, sampled.startsAt + sampled.duration);
-    const sinceEnd = Math.max(0, animationTime - endedAt);
-    for (let age = sinceEnd; age < 6.5; age += .34) {
-      const progress = (animationTime - age - sampled.startsAt) / sampled.duration;
-      if (progress < 0) break;
+    // Anchor samples to the route timeline so their positions do not jump when a pass ends.
+    const spacing = .34;
+    const lastSample = Math.floor((endedAt - sampled.startsAt) / spacing);
+    for (let index = lastSample; index >= 0; index--) {
+      const age = animationTime - (sampled.startsAt + index * spacing);
+      if (age >= 6.5) break;
+      const progress = index * spacing / sampled.duration;
       const point = routePosition(sampled, clamp(progress, 0, 1), baseWidth);
       const widthAtPoint = baseWidth * point.depth;
       const hullX = point.x;
       const x = hullX - sampled.direction * (widthAtPoint * .46 + age * 5);
       const rx = widthAtPoint * .49 + 32 + age * 7, ry = widthAtPoint * .29 + 27 + age * 9;
-      const strength = (1 - smooth(age / 6.5)) * (.54 + .46 * smooth(age / .8));
+      const strength = (1 - smooth(age / 6.5)) * smooth(age / .8);
       const sample = { x, y: point.y, hullX, width: widthAtPoint, direction: sampled.direction, age, rx, ry, strength };
       wake.push(sample);
       if (age < 4.4) fish.push(sample);
@@ -1107,22 +1392,29 @@ function vesselInteraction() {
 const stillWater = { x: 0, y: 0, strength: 0 };
 
 function wakeAt(x, y, wake, spread = 1) {
-  let strength = 0, strongest, dy = 0;
+  let total = 0, flowX = 0, flowY = 0;
+  let strengthWeight = 0, weightedStrength = 0;
   for (const sample of wake) {
     const offsetX = (x - sample.x) / (sample.rx * spread);
     const offsetY = (y - sample.y) / (sample.ry * spread);
     if (Math.abs(offsetX) >= 1 || Math.abs(offsetY) >= 1) continue;
     const influence = (1 - smooth(Math.hypot(offsetX, offsetY))) * sample.strength;
-    if (influence <= strength) continue;
-    strength = influence;
-    strongest = sample;
-    dy = offsetY;
+    if (influence <= 0) continue;
+    const weight = influence * influence;
+    strengthWeight += weight;
+    weightedStrength += weight * influence;
+    total += influence;
+    const rebound = 1 - 1.55 * smooth((sample.age - 1.8) / 2.6);
+    flowX += influence * sample.direction * rebound;
+    flowY += influence * (offsetY * 62 + 13 * Math.sin(sample.age * 1.8));
   }
-  if (!strongest) return stillWater;
-  const rebound = 1 - 1.55 * smooth((strongest.age - 1.8) / 2.6);
+  if (!total) return stillWater;
+  // Blend overlapping wake ages before applying their strength; selecting one
+  // sample causes sudden reversals as the strongest sample changes.
+  const strength = weightedStrength / strengthWeight;
   return {
-    x: strongest.direction * strength * rebound * 91,
-    y: strength * (dy * 62 + 13 * Math.sin(strongest.age * 1.8)),
+    x: strength * flowX / total * 91,
+    y: strength * flowY / total,
     strength
   };
 }
@@ -1145,20 +1437,44 @@ function drawDiveManta(route, elapsed) {
   ctx.restore();
 }
 
-function drawDiveWake(route, elapsed, width) {
-  if (!route.cinematic || elapsed < 2.4) return;
+function clipVesselEmergence(route) {
+  if (route.emergenceX === undefined) return;
+  // Hide gaps behind the launch point even when the foreground silhouette is narrow.
+  const edge = clamp(route.emergenceX, 0, 1) * W;
+  const visible = new Path2D();
+  if (route.direction > 0) visible.rect(edge, 0, W - edge, H);
+  else visible.rect(0, 0, edge, H);
+  ctx.clip(visible);
+}
+
+function drawVesselTrail(route, until = animationTime) {
+  if (!route || route.still || animationTime - until > 6.4) return;
+  const special = route.cinematic || route.showcase;
+  const elapsed = animationTime - route.startsAt;
+  const end = Math.min(until - route.startsAt, route.duration);
+  const width = modelWidth(models[route.index]);
+  const first = special ? 2.4 : .9, spacing = special ? .198 : .38, lifetime = special ? 6.4 : 3.4;
+  const firstParticle = Math.max(0, Math.ceil((elapsed - lifetime - first) / spacing));
+  const lastParticle = Math.floor((Math.min(elapsed, end) - first) / spacing);
   ctx.save();
-  ctx.globalCompositeOperation = 'screen';
-  for (let i = 0; i < 104; i++) {
-    const born = 2.4 + i * .198;
+  clipVesselEmergence(route);
+  if (special) ctx.globalCompositeOperation = 'screen';
+  for (let i = firstParticle; i <= lastParticle; i++) {
+    const born = first + i * spacing;
     const age = elapsed - born;
-    if (age < 0 || age > 6.4) continue;
     const point = routePosition(route, clamp(born / route.duration, 0, 1), width);
-    const spread = 9 + age * 12;
-    const salt = route.seed;
+    const spread = special ? 9 + age * 12 : 5 + age * 5;
+    const salt = route.seed ?? route.index + Math.floor(route.startsAt);
     const x = point.x - route.direction * (width * point.depth * .46 + age * 10) + (random(i, salt + 1) - .5) * spread;
-    const y = point.y + (random(i, salt + 2) - .5) * spread * 1.24 + Math.sin(i + age * .8) * age * 1.8;
-    const alpha = smooth(age * 4) * (1 - smooth(age / 6.4)) * (.55 + random(i, salt + 3) * .45);
+    const y = point.y + (random(i, salt + 2) - .5) * spread * 1.24 + Math.sin(i + age * .8) * age * 1.8 - (special ? 0 : age * 4);
+    const alpha = smooth(age * 4) * (1 - smooth(age / lifetime)) * (.55 + random(i, salt + 3) * .45);
+    if (!special) {
+      ctx.strokeStyle = '#b7d7df';
+      ctx.lineWidth = .8;
+      ctx.globalAlpha = alpha * .47;
+      ctx.beginPath(); ctx.arc(x, y, .8 + random(i, salt + 4) * 1.35, 0, TAU); ctx.stroke();
+      continue;
+    }
     const radius = .7 + random(i, salt + 4) * 1.8;
     ctx.fillStyle = '#24cffa';
     ctx.globalAlpha = alpha * .20;
@@ -1291,9 +1607,10 @@ function drawVessel(surfaces, wreck) {
   const ahead = routePosition(pass, Math.min(1, progress + .015), baseWidth);
   const behind = routePosition(pass, Math.max(0, progress - .015), baseWidth);
   const pitch = clamp(Math.atan2(ahead.y - behind.y, Math.abs(ahead.x - behind.x)), -.32, .32);
-  const beamLength = nightAmount > .01 ? (pass.cinematic ? clamp(baseWidth * 3.9, 190, 480) : clamp(width * 2.25, 105, 250)) : 0;
-  const radius = Math.hypot(width, height) / 2 + beamLength;
-  drawDiveWake(pass, elapsed, baseWidth);
+  const beamLength = nightAmount <= .01 ? 0 : pass.cinematic ? clamp(baseWidth * 3.9, 190, 480)
+    : pass.lure ? clamp(width * 2.8, 130, 330) : clamp(width * 2.25, 105, 250);
+  const hullRadius = Math.hypot(width, height) / 2;
+  const radius = hullRadius + beamLength;
   ctx.save();
   for (const icon of iconOccluders) {
     if (x + radius >= icon.left && x - radius <= icon.right &&
@@ -1315,6 +1632,12 @@ function drawVessel(surfaces, wreck) {
     const aim = Math.atan2(wreck.bottom - (wreck.bottom - wreck.top) * .27 - y, Math.max(22, distance));
     tilt = lerp(tilt, clamp(aim - pitch, -.15, .86), smooth((distance + 30) / 100));
   }
+  if (pass.lure && requestedScene) {
+    const distance = (requestedScene.site * W - x) * pass.direction - nose * Math.cos(pitch);
+    const deltaY = requestedScene.depth * H - y - nose * Math.sin(pitch);
+    const aim = Math.atan2(deltaY, Math.max(35, distance));
+    tilt = clamp(aim - pitch, 0, .42);
+  }
   const light = beamLength && strength > .01 ? surfaceBeam(x, y, pass.direction, pitch, nose, beamLength, strength, tilt) : null;
   if (light) stopLightAtScenery(light, surfaces);
   if (light) {
@@ -1328,6 +1651,9 @@ function drawVessel(surfaces, wreck) {
     ctx.rotate(tilt);
     drawSpotlight(0, beamLength, pass, elapsed);
     ctx.restore();
+  }
+  if (pass.emergenceX !== undefined && (x - pass.emergenceX * W) * pass.direction < hullRadius) {
+    clipVesselEmergence(pass);
   }
   ctx.translate(x, y);
   ctx.rotate(pass.direction * pitch);
@@ -1361,29 +1687,7 @@ function drawWreckLight(wreck, light) {
   ctx.restore();
 }
 
-function draw(now) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalAlpha = 1;
-  if (nightAmount < 1) ctx.drawImage(backdrop[0], 0, 0, cv.width, cv.height);
-  if (nightAmount > 0) {
-    ctx.globalAlpha = nightAmount;
-    ctx.drawImage(backdrop[1], 0, 0, cv.width, cv.height);
-    ctx.globalAlpha = 1;
-  }
-  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
-  ctx.fillStyle = shade('#1d4650', '#040f1e');
-  ctx.fill(floor);
-  const wreck = wreckAt(pass);
-  if (wreck) {
-    const elapsed = animationTime - pass.startsAt;
-    ctx.save();
-    ctx.globalAlpha = .32 * smooth(elapsed / 2) * smooth((pass.duration - elapsed) / 2);
-    wreck.draw(ctx, false);
-    ctx.restore();
-  }
-  drawBottom();
-  if (pass?.cinematic) drawDiveManta(pass, animationTime - pass.startsAt);
-  const interaction = vesselInteraction();
+function scenerySurfaces(now, wake) {
   const blend = blendAt(now);
   const surfaces = [];
   for (const entry of plants) {
@@ -1391,7 +1695,7 @@ function draw(now) {
     if (plant.alpha <= .02) continue;
     const root = seabed(plant.x) + 1;
     const reach = Math.abs(plant.lean) + plant.width * (1 + P.current) + 20;
-    const localWake = interaction.wake.filter(sample => Math.abs(sample.x - plant.x) < reach + sample.rx &&
+    const localWake = wake.filter(sample => Math.abs(sample.x - plant.x) < reach + sample.rx &&
       sample.y + sample.ry > root - plant.height && sample.y - sample.ry < root);
     const extent = reach + (localWake.length ? 94 : 0);
     surfaces.push({ plant, ...plantOutline(plant, localWake), left: plant.x - extent, right: plant.x + extent,
@@ -1404,14 +1708,48 @@ function draw(now) {
       surfaces.push({ path: reef.shape, reef, left: reef.left - reef.thickness * 2,
         right: reef.right + reef.thickness * 2, top: reef.crown - reef.thickness, bottom: reef.base, reflectance: .73 });
     } else {
-      const silt = siltWindow(group, interaction.wake);
+      const silt = siltWindow(group, wake);
       surfaces.push({ silt, path: silt.ring(-.25, 1), rule: 'evenodd', left: silt.left, right: silt.right,
         top: silt.top, bottom: silt.bottom, reflectance: .42 });
     }
   }
-  drawFish(interaction);
+  return surfaces;
+}
+
+function draw(now) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  if (nightAmount < 1) ctx.drawImage(backdrop[0], 0, 0, cv.width, cv.height);
+  if (nightAmount > 0) {
+    ctx.globalAlpha = nightAmount;
+    ctx.drawImage(backdrop[1], 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = 1;
+  }
+  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+  const showcase = currentShowcase();
+  drawShowcase(showcase, 'distant');
+  ctx.fillStyle = shade('#1d4650', '#040f1e');
+  ctx.fill(floor);
+  drawShowcase(showcase, 'bottom');
+  const wreck = wreckAt(pass);
+  if (wreck) {
+    const elapsed = animationTime - pass.startsAt;
+    ctx.save();
+    ctx.globalAlpha = .32 * smooth(elapsed / 2) * smooth((pass.duration - elapsed) / 2);
+    wreck.draw(ctx, false);
+    ctx.restore();
+  }
+  drawBottom();
+  if (pass?.cinematic && !pass.wreck) drawDiveManta(pass, animationTime - pass.startsAt);
+  if (previousWake) drawVesselTrail(previousWake.route, previousWake.until);
+  drawVesselTrail(pass);
+  drawRequestedDiver();
+  const interaction = vesselInteraction();
+  const surfaces = scenerySurfaces(now, interaction.wake);
+  drawFish(interaction, showcase?.fishing);
   if (P.wildlife) drawWildlife();
   const light = drawVessel(surfaces, wreck);
+  const showcaseLights = drawShowcase(showcase, 'water', light, surfaces);
   drawWreckLight(wreck, light);
   drawBubbles();
   ctx.save();
@@ -1430,7 +1768,11 @@ function draw(now) {
     } else drawSilt(silt, path);
   }
   drawSurfaceLight(light, surfaces);
+  if (showcaseLights) {
+    for (const beam of showcaseLights) drawSurfaceLight(beam, surfaces);
+  }
   ctx.restore();
+  drawShowcase(showcase, 'overlay');
 }
 
 function frame(now) {
@@ -1449,7 +1791,7 @@ function frame(now) {
   }
   updateLighting(now);
   lastFrame = now;
-  advanceVessels();
+  if (!advanceRequestedScene()) advanceVessels();
   advanceCrab();
   if (blendAt(now) === 1 && morphStart !== -Infinity) {
     plants = plants.filter(plant => plant.to.alpha > 0);
@@ -1494,8 +1836,11 @@ function moveIconNode(node, icon) {
 }
 
 function applySettings(values) {
+  if (!Number.isFinite(values.submersible) && Number.isInteger(values.vessel)) {
+    values = { ...values, submersible: Math.max(0, values.vessel - 1) };
+  }
   const limits = { adaptive: [0, 1], seed: [0, Number.MAX_SAFE_INTEGER], landscape: [KELP, SILT], lighting: [0, 2], kelpDensity: [.25, 1],
-    current: [0, 1.6], vessel: [0, models.length], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12] };
+    current: [0, 1.6], submersible: [0, models.length], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12] };
   const previousSeed = P.seed;
   let regenerate = false, changeVessel = false, changeLandscape = false, changeLighting = false;
   for (const [key, [low, high]] of Object.entries(limits)) {
@@ -1505,18 +1850,18 @@ function applySettings(values) {
     if (value === P[key]) continue;
     P[key] = value;
     regenerate ||= ['adaptive', 'seed', 'kelpDensity'].includes(key);
-    changeVessel ||= key === 'vessel';
+    changeVessel ||= key === 'submersible';
     changeLandscape ||= key === 'landscape';
     changeLighting ||= key === 'lighting';
   }
   if (P.seed !== previousSeed) cacheBackdrop();
   if (changeLighting) updateLighting(performance.now(), true);
   if (changeLandscape || regenerate) commit(changeLandscape);
-  if (pass?.cinematic && (changeLandscape || nightAmount < .4)) {
+  if (!requestedScene && pass?.cinematic && (changeLandscape || nightAmount < .4)) {
     setVesselPass(null);
     nextPassAt = animationTime + 2;
   }
-  if (changeVessel || (changeLandscape && PREVIEW && !previewMotion)) beginPass(PREVIEW && !previewMotion);
+  if (!requestedScene && (changeVessel || (changeLandscape && PREVIEW && !previewMotion))) beginPass(PREVIEW && !previewMotion);
 }
 
 function handle(message) {
@@ -1541,7 +1886,7 @@ function handle(message) {
     case 'pause':
       if (WALL) {
         paused = !!message.v;
-        if (paused) { pointWildlife(null, null); wildlifeClick = null; }
+        if (paused) { pointWildlife(null, null); wildlifeClick = null; emptyClickTimes.length = 0; }
       }
       break;
     case 'wildlifePointer':
@@ -1549,7 +1894,9 @@ function handle(message) {
       if (WALL) {
         const ratio = devicePixelRatio || 1;
         const valid = Number.isFinite(message.x) && Number.isFinite(message.y);
-        pointWildlife(valid ? message.x / ratio : null, valid ? message.y / ratio : null, message.t === 'ripple');
+        const x = valid ? message.x / ratio : null, y = valid ? message.y / ratio : null;
+        pointWildlife(x, y, message.t === 'ripple');
+        if (message.t === 'ripple') countDesktopClick(x, y);
       }
       return;
     }
@@ -1626,9 +1973,8 @@ function setupDemo() {
   document.body.classList.add('demo');
   const landscape = document.getElementById('demoLandscape');
   const lighting = document.getElementById('demoLighting');
-  const nightDive = document.getElementById('nightDive');
-  const wreckDive = document.getElementById('wreckDive');
-  const wakePass = document.getElementById('wakePass');
+  const scenePicker = document.getElementById('demoScene');
+  const playScene = document.getElementById('playScene');
   if (dutch) {
     landscape.setAttribute('aria-label', 'Landschap');
     landscape.options[1].textContent = 'Rifbogen';
@@ -1640,28 +1986,18 @@ function setupDemo() {
   }
   landscape.addEventListener('change', () => applySettings({ landscape: Number(landscape.value) }));
   lighting.addEventListener('change', () => applySettings({ lighting: Number(lighting.value) }));
-  nightDive.textContent = dutch ? 'Speel nachtduik af' : 'Play night dive';
-  nightDive.addEventListener('click', () => {
-    applySettings({ lighting: 1 });
-    lighting.value = '1';
-    if (!beginNightDive()) beginPass();
-  });
-  wreckDive.textContent = dutch ? 'Speel wrakduik af' : 'Play wreck dive';
-  wreckDive.addEventListener('click', () => {
-    applySettings({ lighting: 1 });
-    lighting.value = '1';
-    if (!beginWreckDive()) nightDive.click();
-  });
-  wakePass.textContent = dutch ? 'Speel kielzog af' : 'Play wake pass';
-  wakePass.addEventListener('click', beginWakeDemo);
+  scenePicker.setAttribute('aria-label', dutch ? 'Scène' : 'Scene');
+  for (const scene of desktopScenes) scenePicker.add(new Option(dutch ? scene.nl : scene.en, scene.id));
+  playScene.textContent = dutch ? 'Speel scène af' : 'Play scene';
+  playScene.addEventListener('click', () => queueDesktopScene(desktopScenes[scenePicker.selectedIndex]));
   document.getElementById('nextVessel').textContent = dutch ? 'Volgend vaartuig' : 'Next vessel';
   document.getElementById('resetIcons').textContent = dutch ? 'Herstel iconen' : 'Reset icons';
   document.getElementById('openSettings').textContent = dutch ? 'Instellingen' : 'Settings';
   document.getElementById('demoHint').textContent = dutch
-    ? 'Sleep iconen met Shift voor een groep. Beweeg of klik vlak bij een zeedier.'
-    : 'Shift-drag icons to move a group. Move or click near an animal.';
+    ? 'Klik vijf keer op lege ruimte voor een verrassingsscène. Sleep iconen met Shift voor een groep.'
+    : 'Click empty space five times for a surprise scene. Shift-drag icons to move a group.';
   document.getElementById('modelName').textContent = models[nextModel].name;
-  document.getElementById('nextVessel').addEventListener('click', () => beginPass());
+  document.getElementById('nextVessel').addEventListener('click', () => { if (!requestedScene) beginPass(); });
   document.getElementById('resetIcons').addEventListener('click', resetDemoIcons);
   document.getElementById('demo').hidden = false;
   resetDemoIcons();
@@ -1670,12 +2006,13 @@ function setupDemo() {
   const initialLandscape = scene === 'reef' || requestedLandscape === 'reef' ? REEF : requestedLandscape === 'silt' ? SILT : KELP;
   applySettings({ landscape: initialLandscape });
   landscape.value = String(initialLandscape);
+  const initialScene = desktopScenes.find(option => option.id === (scene === 'reef' ? 'night' : scene));
+  if (initialScene) {
+    scenePicker.value = initialScene.id;
+    queueDesktopScene(initialScene);
+  }
   switch (scene) {
-    case 'reef':
-    case 'night': nightDive.click(); break;
-    case 'wreck': wreckDive.click(); break;
     case 'crab': beginCrabPass(); break;
-    case 'wake': wakePass.click(); break;
     case 'turtle':
     case 'jelly': {
       const showTurtle = scene === 'turtle';
@@ -1725,8 +2062,10 @@ resize();
 if (DEMO) setupDemo();
 if (!WALL) {
   const pointer = (event, clicked) => {
-    if (event.target.closest('#demo')) pointWildlife(null, null);
+    const controls = event.target.closest('#demo');
+    if (controls) pointWildlife(null, null);
     else pointWildlife(event.clientX, event.clientY, clicked);
+    if (DEMO && clicked) countDesktopClick(controls ? null : event.clientX, controls ? null : event.clientY);
   };
   addEventListener('pointermove', event => pointer(event, false));
   addEventListener('pointerdown', event => { if (event.button === 0) pointer(event, true); });

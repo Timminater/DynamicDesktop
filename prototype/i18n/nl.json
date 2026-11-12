@@ -780,11 +780,10 @@
           "label": "Sterkte van de stroming",
           "hint": "Bepaalt hoe sterk kelp en slib bewegen."
         },
-        "vessel": {
+        "submersible": {
           "label": "Model",
           "options": [
             "Afwisselen",
-            "Cruise Sub 7",
             "Super Sub",
             "NEMO",
             "C-Explorer",

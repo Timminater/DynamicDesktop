@@ -27,8 +27,8 @@
     text-decoration: none; background: #082b43a8; cursor: pointer; }
   #demo select { color-scheme: dark; }
   #demo button:hover, #demo a:hover { background: #1b5067; }
-  #demo #nightDive, #demo #wreckDive, #demo #wakePass { background: #155565; border-color: #6ad0d88a; }
-  #demo #nightDive:hover, #demo #wreckDive:hover, #demo #wakePass:hover { background: #1c6979; }
+  #demo #playScene { background: #155565; border-color: #6ad0d88a; }
+  #demo #playScene:hover { background: #1c6979; }
   #demoHint { flex-basis: 100%; text-align: right; color: #b5cedd; }
 </style>
 </head>
@@ -47,9 +47,8 @@
     <option value="2">Automatic</option>
   </select>
   <span id="modelName" role="status"></span>
-  <button type="button" id="nightDive"></button>
-  <button type="button" id="wreckDive"></button>
-  <button type="button" id="wakePass"></button>
+  <select id="demoScene" aria-label="Scene"></select>
+  <button type="button" id="playScene"></button>
   <button type="button" id="nextVessel"></button>
   <button type="button" id="resetIcons"></button>
   <a id="openSettings" href="settings.html?theme=kelp"></a>
@@ -57,6 +56,10 @@
 </nav>
 <script src="environment.js"></script>
 <script src="kelp-seabed.js"></script>
+<script src="kelp-scenes-deep.js"></script>
+<script src="kelp-scenes-surface.js"></script>
+<script src="kelp-scenes-vessels.js"></script>
+<script src="kelp-scenes-wildlife.js"></script>
 <script src="kelp.js"></script>
 <script src="community-effects.js"></script>
 <script src="share.js"></script>

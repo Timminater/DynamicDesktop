@@ -303,11 +303,10 @@
           "name": "Vessels",
           "params": [
             {
-              "key": "vessel",
+              "key": "submersible",
               "label": "Model",
               "options": [
                 "Alternate",
-                "Cruise Sub 7",
                 "Super Sub",
                 "NEMO",
                 "C-Explorer",

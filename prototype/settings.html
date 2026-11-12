@@ -433,7 +433,14 @@ function defaultsOf(theme) {
   for (const g of theme.groups || []) for (const p of g.params) d[p.key] = p.default;
   return d;
 }
-function valuesOf(theme) { return Object.assign(defaultsOf(theme), state.params[theme.id] || {}); }
+function valuesOf(theme) {
+  const saved = state.params[theme.id] || {};
+  const values = Object.assign(defaultsOf(theme), saved);
+  if (theme.id === 'kelp' && !Object.hasOwn(saved, 'submersible') && Number.isInteger(saved.vessel)) {
+    values.submersible = Math.min(5, Math.max(0, saved.vessel - 1));
+  }
+  return values;
+}
 function fmt(p, v) {
   if (p.options) return p.options[v] || '';
   if (p.format === 'times') return '×' + v.toFixed(2);

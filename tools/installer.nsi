@@ -125,6 +125,7 @@ Section "$(AppFiles)" SecApp
   StrCpy $AppStopped 1
   closed:
   !include "${FILE_LIST}"
+  Delete "$INSTDIR\prototype\assets\kelp\cruise-sub.png"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\DynamicDesktop"
   CreateShortcut "$SMPROGRAMS\DynamicDesktop\DynamicDesktop.lnk" "$INSTDIR\host\bin\DynamicDesktop.exe"
