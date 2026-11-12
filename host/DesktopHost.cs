@@ -313,9 +313,7 @@ class HostContext : ApplicationContext
     readonly HotkeyWindow hotkey = new HotkeyWindow();
     readonly DesktopMouseHook mouseHook;
     readonly Queue<DateTime> restarts = new Queue<DateTime>();
-    WallpaperForm form, dead;
-    readonly List<WallpaperForm> forms = new List<WallpaperForm>();
-    readonly List<WallpaperForm> deadForms = new List<WallpaperForm>();
+    WallpaperForm form, deadForm;
     bool rebuilding;
     string displaySignature = "";
     SettingsForm settingsWin;
@@ -333,7 +331,7 @@ class HostContext : ApplicationContext
         I18n.Load(pageDir, Settings.Lang);
         updateInstallDirectory = RegisteredInstallDirectory();
         mouseHook = new DesktopMouseHook(delegate(int x, int y) {
-            foreach (WallpaperForm f in forms.ToArray()) f.Ripple(x, y);
+            if (form != null) form.Ripple(x, y);
         });
         exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ExitEventName);
         menuEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.MenuEventName);
@@ -348,7 +346,7 @@ class HostContext : ApplicationContext
         {
             manualPause = !manualPause;
             pauseItem.Checked = manualPause;
-            foreach (WallpaperForm f in forms) f.SetManualPause(manualPause);
+            if (form != null) form.SetManualPause(manualPause);
         });
         autoStartItem = new MenuItem(I18n.T("trayAutostart"), delegate { SetAutoStart(!autoStartItem.Checked); });
         autoStartItem.Enabled = !InstallProfile.NoAutostart;
@@ -373,7 +371,7 @@ class HostContext : ApplicationContext
         passthroughItem = new MenuItem(I18n.T("trayMousePassthrough"), delegate {
             Settings.MousePassthrough = !Settings.MousePassthrough;
             passthroughItem.Checked = Settings.MousePassthrough;
-            foreach (WallpaperForm f in forms) f.SetPassthrough(Settings.MousePassthrough);
+            if (form != null) form.SetPassthrough(Settings.MousePassthrough);
             SaveSoon();
         });
         passthroughItem.Checked = Settings.MousePassthrough;
@@ -398,7 +396,7 @@ class HostContext : ApplicationContext
             settingsItem,
             pauseItem,
             passthroughItem,
-            reloadItem = new MenuItem(I18n.T("trayReload"), delegate { foreach (WallpaperForm f in forms) f.Reload(); }),
+            reloadItem = new MenuItem(I18n.T("trayReload"), delegate { if (form != null) form.Reload(); }),
             autoStartItem,
             updateCheckItem,
             updateInstallItem,
@@ -463,7 +461,8 @@ class HostContext : ApplicationContext
         return Json.Stringify(Json.Obj("t", "settings", "v", Settings.For(Settings.Theme)));
     }
     string EnvironmentMessage() { return Json.Stringify(Json.Obj("t", "environment", "v", Settings.Environment)); }
-    void Broadcast(string json) { foreach (WallpaperForm f in forms.ToArray()) f.Post(json); }
+    void Broadcast(string json) { if (form != null) form.Post(json); }
+    static object ScreenSize(Rectangle bounds) { return Json.Obj("w", bounds.Width, "h", bounds.Height); }
     public void SetSettingsDragging(bool dragging)
     {
         string message = "{\"t\":\"dragging\",\"v\":" + (dragging ? "true" : "false") + "}";
@@ -483,9 +482,9 @@ class HostContext : ApplicationContext
         switch (t as string)
         {
             case "hello":
-                Rectangle scr = Screen.PrimaryScreen.Bounds;
+                Rectangle bounds = form == null ? SystemInformation.VirtualScreen : form.SpanBounds;
                 settingsWin.Post(Json.Stringify(Json.Obj("t", "init", "theme", Settings.Theme, "params", Settings.Params,
-                    "screen", Json.Obj("w", scr.Width, "h", scr.Height), "autostart", IsAutoStart(),
+                    "screen", ScreenSize(bounds), "version", RunningVersion.ToString(3), "autostart", IsAutoStart(),
                     "autostartWarn", autoStartSw != null, "autostartSw", autoStartSw ?? "",
                     "lang", Settings.Lang, "langEff", I18n.Code, "langSys", I18n.Sys, "environment", Settings.Environment)));
                 if (form != null && form.LastIcons != "") settingsWin.Post(form.LastIcons);
@@ -499,9 +498,9 @@ class HostContext : ApplicationContext
                 if (theme == Settings.Theme)
                 {
                     string newPage = oldPage == null ? null : Themes.PageFor(pageDir, theme);
-                    if (newPage != null && newPage != oldPage) foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(newPage);
+                    if (form != null && newPage != null && newPage != oldPage) form.LoadPage(newPage);
                     else Broadcast(Json.Stringify(Json.Obj("t", "settings", "v", Json.Obj(key, m["value"]))));
-                    if (key == "iconShadows") foreach (WallpaperForm f in forms) f.RefreshIconMasks();
+                    if (key == "iconShadows" && form != null) form.RefreshIconMasks();
                 }
                 SaveSoon();
                 break;
@@ -515,9 +514,9 @@ class HostContext : ApplicationContext
                 if (theme == Settings.Theme)
                 {
                     string newPage = Themes.PageFor(pageDir, theme);
-                    if (newPage != null && newPage != oldPage) foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(newPage);
+                    if (form != null && newPage != null && newPage != oldPage) form.LoadPage(newPage);
                     else Broadcast("{\"t\":\"reset\"}");
-                    foreach (WallpaperForm f in forms) f.RefreshIconMasks();
+                    if (form != null) form.RefreshIconMasks();
                 }
                 SaveSoon();
                 Log.Write("Restored default settings: " + theme);
@@ -536,7 +535,7 @@ class HostContext : ApplicationContext
                 if (page == null || id == Settings.Theme) return;
                 Settings.Theme = id;
                 SaveSoon();
-                foreach (WallpaperForm f in forms.ToArray()) f.LoadPage(page);
+                if (form != null) form.LoadPage(page);
                 Log.Write("Switched theme: " + id);
                 break;
             }
@@ -816,34 +815,32 @@ class HostContext : ApplicationContext
             nextStart = DateTime.Now.AddSeconds(5);
             return;
         }
-        displaySignature = DisplaySignature();
-        foreach (Screen monitor in Screen.AllScreens)
-        {
-            var f = new WallpaperForm(pageDir, page, manualPause, monitor.Bounds);
-            forms.Add(f);
-            if (monitor.Primary || form == null) form = f;
-            f.SettingsJson = SettingsMessage;
-            f.EnvironmentJson = EnvironmentMessage;
-            f.IconsChanged += delegate(string json) { if (f == form && settingsWin != null) settingsWin.Post(json); };
-            f.RecordProgress += delegate(string p) { if (f == form && settingsWin != null) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
-            f.HandleDestroyed += OnFormGone;
-            f.Show();
-        }
+        Screen[] displays = Screen.AllScreens;
+        displaySignature = DisplaySignature(displays);
+        var f = new WallpaperForm(pageDir, page, manualPause, Array.ConvertAll(displays, s => s.Bounds));
+        form = f;
+        f.SettingsJson = SettingsMessage;
+        f.EnvironmentJson = EnvironmentMessage;
+        f.IconsChanged += delegate(string json) { if (f == form && settingsWin != null) settingsWin.Post(json); };
+        f.RecordProgress += delegate(string p) { if (f == form && settingsWin != null) settingsWin.Post("{\"t\":\"recProgress\",\"p\":" + p + "}"); };
+        f.HandleDestroyed += OnFormGone;
+        if (settingsWin != null) settingsWin.Post(Json.Stringify(Json.Obj("t", "display", "screen", ScreenSize(f.SpanBounds))));
+        f.Show();
     }
 
-    static string DisplaySignature()
+    static string DisplaySignature(Screen[] displays)
     {
         var parts = new List<string>();
-        foreach (Screen s in Screen.AllScreens) parts.Add(s.DeviceName + ":" + s.Bounds.ToString() + ":" + s.Primary);
+        foreach (Screen s in displays) parts.Add(s.DeviceName + ":" + s.Bounds.ToString() + ":" + s.Primary);
         parts.Sort(StringComparer.Ordinal);
         return string.Join("|", parts.ToArray());
     }
 
-    void RebuildForms()
+    void RebuildForm()
     {
         rebuilding = true;
-        foreach (WallpaperForm f in forms.ToArray()) f.Shutdown();
-        forms.Clear(); form = null;
+        if (form != null) form.Shutdown();
+        form = null;
         rebuilding = false;
         nextStart = DateTime.Now.AddMilliseconds(500);
     }
@@ -851,9 +848,9 @@ class HostContext : ApplicationContext
     void OnFormGone(object sender, EventArgs e)
     {
         var f = (WallpaperForm)sender;
-        if (!forms.Remove(f)) return;
-        deadForms.Add(f);
-        if (f == form) form = forms.Count > 0 ? forms[0] : null;
+        if (f != form) return;
+        form = null;
+        deadForm = f;
         if (rebuilding) return;
         if (exiting) return;
         if (f.Fatal) { Exit(); return; }
@@ -869,7 +866,6 @@ class HostContext : ApplicationContext
             return;
         }
         Log.Write("Explorer destroyed the wallpaper window; reattaching in one second");
-        RebuildForms();
         nextStart = DateTime.Now.AddSeconds(1);
     }
 
@@ -1003,7 +999,7 @@ class HostContext : ApplicationContext
     bool CanInstallUpdate()
     {
         if (!updateInstallRequested && (!Settings.AutoInstallUpdates || settingsWin != null)) return false;
-        return !forms.Exists(f => f.IsSharing);
+        return form == null || !form.IsSharing;
     }
 
     void InstallUpdate()
@@ -1079,14 +1075,12 @@ class HostContext : ApplicationContext
 
     void Watch()
     {
-        if (dead != null) { try { dead.Dispose(); } catch { } dead = null; }
-        foreach (WallpaperForm f in deadForms.ToArray()) { try { f.Dispose(); } catch { } }
-        deadForms.Clear();
+        if (deadForm != null) { try { deadForm.Dispose(); } catch { } deadForm = null; }
         if (exitEvent.WaitOne(0)) { Exit(); return; }
         if (menuEvent.WaitOne(0)) ShowMenu();
         if (settingsEvent.WaitOne(0)) OpenSettings();
         if (DateTime.Now >= saveDue) { saveDue = DateTime.MaxValue; Settings.Save(); }
-        if (forms.Count > 0 && DisplaySignature() != displaySignature) RebuildForms();
+        if (form != null && DisplaySignature(Screen.AllScreens) != displaySignature) RebuildForm();
         if (form == null && !exiting && DateTime.Now >= nextStart) StartForm();
         WatchUpdates();
     }
@@ -1101,7 +1095,7 @@ class HostContext : ApplicationContext
         hotkey.Dispose();
         mouseHook.Dispose();
         tray.Visible = false;
-        foreach (WallpaperForm f in forms.ToArray()) f.Shutdown();
+        if (form != null) form.Shutdown();
         Log.Write("Exiting");
         ExitThread();
     }
@@ -1312,7 +1306,8 @@ class WallpaperForm : Form
     readonly System.Windows.Forms.Timer iconTimer, fgTimer, pointerTimer;
     readonly string pageDir;
     readonly IconReader reader = new IconReader();
-    Rectangle screen;
+    readonly Rectangle[] monitors;
+    readonly Rectangle desktopBounds;
     IntPtr parentHwnd, insertAfter;
     string lastIcons = "";
     string lastMasks = "";
@@ -1333,14 +1328,17 @@ class WallpaperForm : Form
     public Func<string> EnvironmentJson;
     public event Action<string> IconsChanged;           // Forward icon changes to the settings preview.
     public string LastIcons { get { return lastIcons; } }
+    public Rectangle SpanBounds { get { return desktopBounds; } }
     protected override bool ShowWithoutActivation { get { return true; } }
 
-    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle bounds)
+    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle[] displays)
     {
         this.pageDir = pageDir;
         this.page = page;
         this.manualPause = manualPause;
-        this.screen = bounds;
+        monitors = displays.Length == 0 ? new[] { SystemInformation.VirtualScreen } : displays;
+        desktopBounds = monitors[0];
+        for (int i = 1; i < monitors.Length; i++) desktopBounds = Rectangle.Union(desktopBounds, monitors[i]);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -1369,7 +1367,7 @@ class WallpaperForm : Form
     public void RefreshIconMasks() { iconsDirty = true; lastMaskPoll = DateTime.MinValue; }
     public void Ripple(int x, int y)
     {
-        if (screen.Contains(x, y)) Post("{\"t\":\"ripple\",\"x\":" + (x - screen.X) + ",\"y\":" + (y - screen.Y) + "}");
+        if (desktopBounds.Contains(x, y)) Post("{\"t\":\"ripple\",\"x\":" + (x - desktopBounds.X) + ",\"y\":" + (y - desktopBounds.Y) + "}");
     }
     bool IsWildlifePage { get { return string.Equals(page.Split('?')[0], "kelp.html", StringComparison.OrdinalIgnoreCase); } }
     void ClearWildlifePointer()
@@ -1382,11 +1380,11 @@ class WallpaperForm : Form
     {
         Point point = Cursor.Position;
         var nativePoint = new Native.POINT { X = point.X, Y = point.Y };
-        if (!screen.Contains(point) || !DesktopMouseHook.IsDesktop(nativePoint)) { ClearWildlifePointer(); return; }
+        if (!desktopBounds.Contains(point) || !DesktopMouseHook.IsDesktop(nativePoint)) { ClearWildlifePointer(); return; }
         if (pointerActive && point == lastPointer) return;
         pointerActive = true;
         lastPointer = point;
-        Post("{\"t\":\"wildlifePointer\",\"x\":" + (point.X - screen.X) + ",\"y\":" + (point.Y - screen.Y) + "}");
+        Post("{\"t\":\"wildlifePointer\",\"x\":" + (point.X - desktopBounds.X) + ",\"y\":" + (point.Y - desktopBounds.Y) + "}");
     }
     public void SetPassthrough(bool v)
     {
@@ -1649,11 +1647,24 @@ class WallpaperForm : Form
         Native.SetWindowLong(Handle, Native.GWL_STYLE, style);
         SetPassthrough(Settings.MousePassthrough);
         Native.SetParent(Handle, parentHwnd);
+        if (Native.GetParent(Handle) != parentHwnd)
+        {
+            Log.Write("Could not attach the wallpaper window to the desktop");
+            return false;
+        }
 
-        var pt = new Native.POINT { X = screen.X, Y = screen.Y };
-        Native.ScreenToClient(parentHwnd, ref pt);
-        Native.SetWindowPos(Handle, insertAfter, pt.X, pt.Y, screen.Width, screen.Height,
-            Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | Native.SWP_FRAMECHANGED);
+        var pt = new Native.POINT { X = desktopBounds.X, Y = desktopBounds.Y };
+        if (!Native.ScreenToClient(parentHwnd, ref pt))
+        {
+            Log.Write("Could not translate the wallpaper bounds to desktop client coordinates");
+            return false;
+        }
+        if (!Native.SetWindowPos(Handle, insertAfter, pt.X, pt.Y, desktopBounds.Width, desktopBounds.Height,
+            Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | Native.SWP_FRAMECHANGED))
+        {
+            Log.Write("Could not position the wallpaper across the desktop: " + desktopBounds + ", error " + Marshal.GetLastWin32Error());
+            return false;
+        }
         WallpaperWindows.Add(Handle);
         EnsureZOrder();
 
@@ -1672,7 +1683,7 @@ class WallpaperForm : Form
             winEventHook = Native.SetWinEventHook(0x8000 /* OBJECT_CREATE */, 0x800B /* OBJECT_LOCATIONCHANGE */, IntPtr.Zero,
                 winEventProc, pid, 0, 0 /* WINEVENT_OUTOFCONTEXT */);
         }
-        Log.Write(string.Format("Attached ({0}), screen {1}", mode, screen));
+        Log.Write(string.Format("Attached ({0}), desktop {1} across {2} monitor(s)", mode, desktopBounds, monitors.Length));
         return true;
     }
 
@@ -1723,11 +1734,11 @@ class WallpaperForm : Form
         for (int i = 0; i < rects.Count; i++)
         {
             Native.RECT r = rects[i];
-            if (r.Right <= screen.Left || r.Left >= screen.Right || r.Bottom <= screen.Top || r.Top >= screen.Bottom) continue;
+            if (r.Right <= desktopBounds.Left || r.Left >= desktopBounds.Right || r.Bottom <= desktopBounds.Top || r.Top >= desktopBounds.Bottom) continue;
             if (!first) sb.Append(',');
             first = false;
-            sb.Append('[').Append(r.Left - screen.X).Append(',').Append(r.Top - screen.Y).Append(',')
-              .Append(r.Right - screen.X).Append(',').Append(r.Bottom - screen.Y).Append(']');
+            sb.Append('[').Append(r.Left - desktopBounds.X).Append(',').Append(r.Top - desktopBounds.Y).Append(',')
+              .Append(r.Right - desktopBounds.X).Append(',').Append(r.Bottom - desktopBounds.Y).Append(']');
         }
         sb.Append("]}");
         string json = sb.ToString();
@@ -1766,7 +1777,7 @@ class WallpaperForm : Form
         }
         if (maskInFlight || shuttingDown) return;
         maskInFlight = true;
-        Rectangle bounds = screen;
+        Rectangle bounds = desktopBounds;
         var worker = new Thread(delegate()
         {
             string masks = null;
@@ -1800,11 +1811,11 @@ class WallpaperForm : Form
         worker.Start();
     }
 
-    // ---------------------------------------------------------------- Pause for maximized / fullscreen windows
+    // ---------------------------------------------------------------- Pause when all physical monitors are covered
     void PollForeground()
     {
         if (web.CoreWebView2 == null) return;
-        bool pause = manualPause || DesktopCoverage.Covers(screen);
+        bool pause = manualPause || DesktopCoverage.CoversAll(monitors);
         int p = pause ? 1 : 0;
         if (p == lastPause) return;
         lastPause = p;
@@ -1812,7 +1823,7 @@ class WallpaperForm : Form
         if (shuttingDown) return;
         if (pause || !IsWildlifePage) { pointerTimer.Stop(); ClearWildlifePointer(); }
         else { pointerTimer.Start(); PollWildlifePointer(); }
-        Log.Write(string.Format("{0} on {1}", pause ? "Paused" : "Resumed", screen));
+        Log.Write(string.Format("{0} on desktop {1}", pause ? "Paused" : "Resumed", desktopBounds));
     }
 
     // ---------------------------------------------------------------- Exit: remove the window and let Explorer redraw the original wallpaper
@@ -1841,7 +1852,7 @@ class WallpaperForm : Form
     }
 }
 
-// Share one snapshot of top-level windows across the wallpaper timers.
+// Reuse one snapshot of top-level windows for all physical monitor checks.
 static class DesktopCoverage
 {
     static readonly uint OwnProcess = (uint)Process.GetCurrentProcess().Id;
@@ -1849,7 +1860,7 @@ static class DesktopCoverage
     static readonly List<Point> MaximizedCenters = new List<Point>();
     static DateTime lastScan = DateTime.MinValue;
 
-    public static bool Covers(Rectangle monitor)
+    public static bool CoversAll(Rectangle[] monitors)
     {
         DateTime now = DateTime.UtcNow;
         if ((now - lastScan).TotalMilliseconds >= 250)
@@ -1877,6 +1888,11 @@ static class DesktopCoverage
                 return true;
             }, IntPtr.Zero);
         }
+        return Array.TrueForAll(monitors, IsCovered);
+    }
+
+    static bool IsCovered(Rectangle monitor)
+    {
         foreach (Rectangle window in FullscreenCandidates) if (window.Contains(monitor)) return true;
         foreach (Point center in MaximizedCenters) if (monitor.Contains(center)) return true;
         return false;
@@ -2092,7 +2108,7 @@ static class Native
     [DllImport("user32.dll")] public static extern IntPtr SetParent(IntPtr child, IntPtr parent);
     [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int index, int value);
-    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);

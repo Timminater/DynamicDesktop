@@ -33,12 +33,12 @@ Publish stable versions as `vX.Y.Z` with the `DynamicDesktop-X.Y.Z-win-x64-Setup
 
 ## Desktop behavior
 
-- The host opens one wallpaper window per monitor. It sends the active theme to all monitors and maps Explorer icon rectangles into monitor-local coordinates. The primary monitor supplies Settings preview and exports.
+- The host renders one continuous wallpaper across the physical bounds of all connected monitors. Desktop icons and pointer input use the same coordinate space. Settings preview and exports cover the full layout, and changing the monitor arrangement rebuilds the wallpaper at the new bounds.
 - Explorer events trigger debounced icon updates, with periodic polling as a fallback. Local shell icon masks are resolved in the background for wallpapers with icon shadows enabled.
-- Fullscreen or maximized windows pause playback on the monitor they cover. The tray can pause all monitors.
+- Automatic pause takes effect when all monitors are covered by fullscreen or maximized windows. The tray can pause the wallpaper at any time.
 - The app reads the catalog from `prototype/themes.json` and opens the themes listed there.
 - Theme source can be reloaded from the tray. Host changes require a rebuild and restart.
 
 ## Page messages
 
-Settings sends theme selection, settings, location, language, startup and sharing requests. The host returns saved settings, primary-monitor icon rectangles and share results. A ready wallpaper receives settings, environment, icon rectangles and pause state. Icon masks and click coordinates are sent only to wallpaper views.
+Settings sends theme selection, settings, location, language, startup and sharing requests. The host returns saved settings, desktop dimensions, icon rectangles and share results. A ready wallpaper receives settings, environment, icon rectangles and pause state. Icon masks and click coordinates are sent only to the wallpaper view.

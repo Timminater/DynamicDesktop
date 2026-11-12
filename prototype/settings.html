@@ -214,6 +214,7 @@
   .saved { transition: color .2s; }
   .saved.flash { color: var(--text); }
   .bottom-actions { display: flex; align-items: center; gap: 8px; }
+  .app-version { white-space: nowrap; }
   .ghost-btn.help-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 16px; font-weight: 800; line-height: 1; }
   .ghost-btn {
     display: inline-block; text-decoration: none; font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 10px;
@@ -339,6 +340,7 @@
 <footer class="bottom">
   <span class="saved" id="saved" data-i18n="autosave">Changes are saved automatically and applied to your desktop right away</span>
   <div class="bottom-actions">
+    <span class="app-version" id="appVersion" hidden></span>
     <button class="ghost-btn help-button" id="helpOpen" data-i18n-title="helpButtonTitle" title="Common questions and troubleshooting" aria-label="Help">?</button>
   </div>
 </footer>
@@ -797,13 +799,15 @@ $('shareReveal').addEventListener('click', () => send({ t: 'revealShare' }));
 
 function onHost(m) {
   if (m.t === 'init') {
+    state.screen = m.screen;
+    $('appVersion').hidden = !m.version;
+    $('appVersion').textContent = m.version ? `DynamicDesktop v${m.version}` : '';
     state.langSetting = !m.lang ? 'auto' : m.lang === 'auto' || LANGS[m.lang] ? m.lang : 'en';
     state.langSys = LANGS[m.langSys] ? m.langSys : 'en';
     setLang(m.langEff || state.langSys).then(() => {
       state.theme = themeById(m.theme) && themeById(m.theme).status === 'ready' ? m.theme : 'beach';
       state.params = m.params || {};
       state.environment = m.environment || {};
-      state.screen = m.screen;
       $('autostart').checked = !!m.autostart;
       state.autostartWarn = !!m.autostartWarn;
       state.autostartSw = m.autostartSw || '';
@@ -812,6 +816,11 @@ function onHost(m) {
       showTheme();
       document.documentElement.classList.add('ready');
     });
+  } else if (m.t === 'display') {
+    state.screen = m.screen;
+    state.icons = { t: 'icons', vis: false, r: [] };
+    layoutPreview();
+    toPreview(state.icons);
   } else if (m.t === 'themeChanged') {
     if (!themeById(m.id) || themeById(m.id).status !== 'ready') return;
     state.theme = m.id;
