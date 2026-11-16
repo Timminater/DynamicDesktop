@@ -303,17 +303,20 @@
           "name": "Vessels",
           "params": [
             {
-              "key": "submersible",
-              "label": "Model",
-              "options": [
-                "Alternate",
+              "key": "submersibles",
+              "label": "Submersible models",
+              "toggles": [
                 "Super Sub",
-                "NEMO",
-                "C-Explorer",
-                "C-Researcher",
-                "GREYSHARK"
+                "NEMO 2",
+                "C-Explorer 3",
+                "C-Researcher 3",
+                "GREYSHARK MK II",
+                "C-Explorer 5",
+                "C-Quester 2",
+                "Cruise Sub 7",
+                "Super Yacht Sub 3"
               ],
-              "default": 0
+              "default": 511
             },
             {
               "key": "interval",

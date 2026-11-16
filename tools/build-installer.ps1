@@ -38,12 +38,14 @@ $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', '
     'docs\images\beach.webp', 'docs\images\meadow.webp', 'docs\images\maldives.webp')
 $themeFiles = @('flat.html', 'meadow.html', 'settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'serve.ps1', 'themes.json',
     'beach-palms.js', 'meadow-boy.js', 'meadow-cat.js', 'environment.js', 'community-effects.js', 'living-designs.js', 'woodland.js', 'landscape.js',
-    'locations.js', 'kelp.js', 'kelp-seabed.js', 'kelp-scenes-deep.js', 'kelp-scenes-surface.js', 'kelp-scenes-vessels.js', 'kelp-scenes-wildlife.js',
+    'locations.js', 'kelp.js', 'kelp-models.js', 'kelp-seabed.js', 'kelp-scenes-deep.js', 'kelp-scenes-surface.js', 'kelp-scenes-vessels.js', 'kelp-scenes-wildlife.js',
     'i18n\en.json', 'i18n\nl.json',
     'assets\beach-coconut-palm-v2.png', 'assets\beach-coconut-palm-curved.png', 'assets\beach-coconut-palm-airy.png', 'assets\beach-coconut-palm-windswept.png', 'assets\beach-coconut-palm-arch.png',
     'assets\meadow-black-kitten.png', 'assets\meadow-kite-boy-level-face.png', 'assets\meadow-kite-boy-diagonal-run.png',
     'assets\kelp\super-sub.png', 'assets\kelp\nemo.png',
-    'assets\kelp\c-explorer.png', 'assets\kelp\c-researcher.png', 'assets\kelp\greyshark.png')
+    'assets\kelp\c-explorer.png', 'assets\kelp\c-researcher.png', 'assets\kelp\greyshark.png',
+    'assets\kelp\c-explorer-5.png', 'assets\kelp\c-quester-2.png', 'assets\kelp\cruise-sub-7.png',
+    'assets\kelp\super-yacht-sub-3.png')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 $ready = @($themes | Where-Object { $_.status -eq 'ready' })
 $freePages = @{

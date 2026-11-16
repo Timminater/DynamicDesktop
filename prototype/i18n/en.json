@@ -1,6 +1,7 @@
 {
   "name": "English",
   "ui": {
+    "toggleCount": "{n} of {total} on",
     "adaptive": "Adaptive",
     "themes": "Themes",
     "collectionTitle": "Find your scenery.",

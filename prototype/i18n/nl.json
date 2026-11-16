@@ -1,6 +1,7 @@
 {
   "name": "Nederlands",
   "ui": {
+    "toggleCount": "{n} van {total} aan",
     "adaptive": "Adaptief",
     "themes": "Thema’s",
     "collectionTitle": "Kies je landschap.",
@@ -780,16 +781,8 @@
           "label": "Sterkte van de stroming",
           "hint": "Bepaalt hoe sterk kelp en slib bewegen."
         },
-        "submersible": {
-          "label": "Model",
-          "options": [
-            "Afwisselen",
-            "Super Sub",
-            "NEMO",
-            "C-Explorer",
-            "C-Researcher",
-            "GREYSHARK"
-          ]
+        "submersibles": {
+          "label": "Duikbootmodellen"
         },
         "interval": {
           "label": "Gemiddelde tijd tussen passages",

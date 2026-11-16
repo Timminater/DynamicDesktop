@@ -2,7 +2,7 @@
 
 function drawKelpVesselScene(scene, view, layer) {
   const { id, t, p, site, direction, alpha } = scene;
-  const { ctx, W, H, night, seabed, models, modelWidth, surfaces } = view;
+  const { ctx, W, H, night, seabed, models, enabledModels, modelWidth, surfaces } = view;
   const unit = Math.min(W, H);
   const day = 1 - night * .49;
 
@@ -29,7 +29,8 @@ function drawKelpVesselScene(scene, view, layer) {
   }
 
   if (id === 'subMeeting' && layer === 'water') {
-    const subs = [models[0], models[1]].map((sub, i) => {
+    const subs = enabledModels.slice(0, 2).map((index, i) => {
+      const sub = models[index];
       const heading = i === 0 ? direction : -direction;
       const width = modelWidth(sub) * (i === 0 ? 1.02 : .85);
       const x = W * .5 + heading * (p * 2 - 1) * (W * .5 + width);

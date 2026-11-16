@@ -10,15 +10,11 @@ const iconLayer = document.getElementById('icons');
 const TASKBAR = 48, GRID_X0 = 4, GRID_Y0 = 6, CELL_W = 76, CELL_H = 100;
 const KELP = 0, REEF = 1, SILT = 2;
 const DEFAULTS = { adaptive: 1, seed: 42, landscape: KELP, lighting: 0, kelpDensity: 0.64,
-  current: 0.8, submersible: 0, interval: 55, fish: 1, wildlife: 1, bubbles: 5 };
+  current: 0.8, submersibles: allKelpModels, interval: 55, fish: 1, wildlife: 1, bubbles: 5 };
 const P = { ...DEFAULTS };
-const models = [
-  { id: 'super-sub', name: 'Super Sub', scale: 1 },
-  { id: 'nemo', name: 'NEMO', scale: .74 },
-  { id: 'c-explorer', name: 'C-Explorer', scale: .81 },
-  { id: 'c-researcher', name: 'C-Researcher', scale: .89 },
-  { id: 'greyshark', name: 'GREYSHARK', scale: 1.08 }
-];
+const models = kelpModels;
+const modelIndices = models.map((_, index) => index);
+let enabledModels = modelIndices;
 const palette = ['#427d80', '#3f7478', '#598c8c', '#346469', '#518487'];
 const MORPH_MS = 920;
 const TAU = Math.PI * 2;
@@ -67,7 +63,8 @@ function countDesktopClick(x, y, now = performance.now()) {
   emptyClickTimes.push(now);
   if (emptyClickTimes.length === 5) {
     emptyClickTimes.length = 0;
-    queueDesktopScene(desktopScenes[Math.floor(Math.random() * desktopScenes.length)]);
+    const eligible = desktopScenes.filter(sceneAvailable);
+    queueDesktopScene(eligible[Math.floor(Math.random() * eligible.length)]);
   }
 }
 
@@ -170,39 +167,50 @@ function distantRidges(paint, night) {
     paint.fillStyle = color;
     paint.beginPath();
     paint.moveTo(0, H);
+    let previousX, previousY;
     for (let i = 0; i <= 78; i++) {
       const t = i / 78;
       const mass = (.42 + .32 * Math.cos(t * TAU - .5) + .18 * Math.sin(t * 15 + phase));
       const erosion = .035 * Math.sin(t * 68 + phase) + .027 * (random(i, phase) - .5);
-      paint.lineTo(t * W, (level - height * mass + erosion) * H);
+      const x = t * W, y = (level - height * mass + erosion) * H;
+      if (i === 0) paint.lineTo(x, y);
+      else paint.quadraticCurveTo(previousX, previousY, (previousX + x) / 2, (previousY + y) / 2);
+      previousX = x;
+      previousY = y;
     }
+    paint.lineTo(previousX, previousY);
     paint.lineTo(W, H);
     paint.fill();
   }
 }
 
-function cacheBackdrop() {
-  const scale = Math.min(cv.width / W, cv.height / H, 960 / Math.max(W, H));
-  backdrop = [false, true].map(night => {
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(W * scale));
-    canvas.height = Math.max(1, Math.round(H * scale));
-    const paint = canvas.getContext('2d', { alpha: false });
-    paint.scale(canvas.width / W, canvas.height / H);
-    const water = paint.createLinearGradient(0, 0, W * .45, H);
-    water.addColorStop(0, night ? '#0b263e' : '#3689ab');
-    water.addColorStop(.55, night ? '#071c32' : '#277493');
-    water.addColorStop(1, night ? '#030f20' : '#18516d');
-    paint.fillStyle = water;
-    paint.fillRect(0, 0, W, H);
-    const glow = paint.createRadialGradient(W * .18, H * .19, 0, W * .18, H * .19, Math.max(W, H) * .66);
-    glow.addColorStop(0, night ? '#385f9c22' : '#8ce3e651');
-    glow.addColorStop(1, '#297c9300');
-    paint.fillStyle = glow;
-    paint.fillRect(0, 0, W, H);
-    distantRidges(paint, night);
-    return canvas;
-  });
+function backdropAt(night) {
+  const index = Number(night);
+  let canvas = backdrop[index];
+  if (canvas?.width === cv.width && canvas.height === cv.height) return canvas;
+  canvas = backdrop[index] ||= document.createElement('canvas');
+  // Sharing can temporarily change the output size without changing the desktop layout.
+  canvas.width = cv.width;
+  canvas.height = cv.height;
+  const paint = canvas.getContext('2d', { alpha: false });
+  paint.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+  const water = paint.createLinearGradient(0, 0, W * .45, H);
+  water.addColorStop(0, night ? '#0b263e' : '#3689ab');
+  water.addColorStop(.55, night ? '#071c32' : '#277493');
+  water.addColorStop(1, night ? '#030f20' : '#18516d');
+  paint.fillStyle = water;
+  paint.fillRect(0, 0, W, H);
+  const glow = paint.createRadialGradient(W * .18, H * .19, 0, W * .18, H * .19, Math.max(W, H) * .66);
+  glow.addColorStop(0, night ? '#385f9c22' : '#8ce3e651');
+  glow.addColorStop(1, '#297c9300');
+  paint.fillStyle = glow;
+  paint.fillRect(0, 0, W, H);
+  distantRidges(paint, night);
+  return canvas;
+}
+
+function resetBackdrop() {
+  backdrop = [];
   floor = new Path2D();
   floor.moveTo(0, seabed(0));
   for (let i = 1; i <= 80; i++) floor.lineTo(W * i / 80, seabed(W * i / 80));
@@ -1000,12 +1008,13 @@ function spawnPoint(now) {
 }
 
 function beginPass(still = false) {
+  if (!enabledModels.length) return;
   const start = spawnPoint(performance.now());
   if (!start) {
     if (!pass) nextPassAt = animationTime + 2 + Math.random() * 3;
     return;
   }
-  const index = P.submersible ? P.submersible - 1 : nextModel;
+  const index = enabledModels.find(index => index >= nextModel) ?? enabledModels[0];
   if (!still) nextModel = (index + 1) % models.length;
   const direction = start.x < .24 ? 1 : start.x > .76 ? -1 : Math.random() < .5 ? -1 : 1;
   const distance = direction === 1 ? 1 - start.x : start.x;
@@ -1073,7 +1082,7 @@ function beginNightDive(onRequest = false) {
   const direction = Math.random() < .5 ? -1 : 1;
   const entry = clear[0] || (onRequest ? { x: W * (direction > 0 ? .06 : .94), y: H * .60, direction } : null);
   if (!entry) return false;
-  const index = DEMO || !P.submersible ? 0 : P.submersible - 1;
+  const index = enabledModels[0];
   const startDepth = entry.y / H;
   const rise = P.landscape === KELP ? .28 : P.landscape === SILT ? .13 : .22;
   setVesselPass({
@@ -1117,7 +1126,7 @@ function beginWreckDive(onRequest = false) {
   }
   if (site == null) return false;
   const direction = site > .5 ? 1 : site < .5 ? -1 : Math.random() < .5 ? 1 : -1;
-  const index = DEMO || !P.submersible ? 0 : P.submersible - 1;
+  const index = enabledModels[0];
   const floorDepth = seabed(site * W) / H;
   setVesselPass({ index, start: { x: site - direction * .34, y: floorDepth - .20 }, direction, startsAt: animationTime,
     duration: 23, endDepth: floorDepth - .12, drift: -.045, cinematic: true, landscape: P.landscape,
@@ -1169,7 +1178,7 @@ function beginWakePass() {
   const x = clamp(edge - direction * 20, W * .035, W * .965);
   const y = clamp((group.top + group.bottom) * .5 / H, .22, .75);
   setVesselPass({
-    index: DEMO || !P.submersible ? 0 : P.submersible - 1, start: { x: x / W, y }, direction, startsAt: animationTime, duration: 18,
+    index: enabledModels[0], start: { x: x / W, y }, direction, startsAt: animationTime, duration: 18,
     endDepth: clamp(y + .09, .25, .82), drift: -.015, showcase: true, far: .92, near: 1.16, seed: 91,
     emergenceX: edge / W
   });
@@ -1182,15 +1191,15 @@ function beginDiverPass() {
 }
 
 const desktopScenes = [
-  { id: 'night', en: 'Night dive', nl: 'Nachtduik', lighting: 1, start: () => beginNightDive(true) },
-  { id: 'wreck', en: 'Wreck dive', nl: 'Wrakduik', lighting: 1, start: () => beginWreckDive(true) },
-  { id: 'wake', en: 'Wake pass', nl: 'Kielzog', start: beginWakePass },
+  { id: 'night', en: 'Night dive', nl: 'Nachtduik', lighting: 1, minModels: 1, start: () => beginNightDive(true) },
+  { id: 'wreck', en: 'Wreck dive', nl: 'Wrakduik', lighting: 1, minModels: 1, start: () => beginWreckDive(true) },
+  { id: 'wake', en: 'Wake pass', nl: 'Kielzog', minModels: 1, start: beginWakePass },
   { id: 'diver', en: 'Passing diver', nl: 'Langszwemmende duiker', start: beginDiverPass },
   { id: 'jellyParade', en: 'Jellyfish parade', nl: 'Kwallenparade', duration: 26, layer: 'water', draw: drawKelpDeepScene },
-  { id: 'subMeeting', en: 'Meeting in the depths', nl: 'Ontmoeting in de diepte', duration: 23, layer: 'water', draw: drawKelpVesselScene },
+  { id: 'subMeeting', en: 'Meeting in the depths', nl: 'Ontmoeting in de diepte', duration: 23, layer: 'water', minModels: 2, draw: drawKelpVesselScene },
   { id: 'whaleEye', en: 'Eye of the whale', nl: 'Het oog van de walvis', duration: 30, layer: 'distant', draw: drawKelpDeepScene },
-  { id: 'deepLure', en: 'Light from the depths', nl: 'Licht uit de diepte', duration: 24, layer: 'water', draw: drawKelpDeepScene, lighting: 1, start: beginDeepLurePass },
-  { id: 'research', en: 'Seabed research', nl: 'Onderzoek bij de bodem', duration: 34, layer: 'bottom', draw: drawKelpVesselScene },
+  { id: 'deepLure', en: 'Light from the depths', nl: 'Licht uit de diepte', duration: 24, layer: 'water', draw: drawKelpDeepScene, lighting: 1, minModels: 1, start: beginDeepLurePass },
+  { id: 'research', en: 'Seabed research', nl: 'Onderzoek bij de bodem', duration: 34, layer: 'bottom', model: 'c-researcher', draw: drawKelpVesselScene },
   { id: 'sunBreak', en: 'Break in the clouds', nl: 'Zonnedoorbraak', duration: 28, layer: 'overlay', draw: drawKelpSurfaceScene, lighting: 0 },
   { id: 'flatfish', en: 'In the sand', nl: 'In het zand', duration: 16, layer: 'bottom', draw: drawKelpDeepScene },
   { id: 'dolphins', en: 'Dolphins in the shallows', nl: 'Dolfijnen in de bovenlaag', duration: 23, layer: 'water', draw: drawKelpWildlifeScene, lighting: 0 },
@@ -1199,7 +1208,13 @@ const desktopScenes = [
   { id: 'fishingBoat', en: 'Fishing boat', nl: 'Vissersboot met vislijn', duration: 36, layer: 'water', draw: drawKelpSurfaceScene, lighting: 0 }
 ];
 
+function sceneAvailable(scene) {
+  return enabledModels.length >= (scene.minModels ?? 0) &&
+    (scene.model == null || enabledModels.some(index => models[index].id === scene.model));
+}
+
 function queueDesktopScene(scene) {
+  if (!sceneAvailable(scene)) return;
   if (requestedScene) {
     setVesselPass(null);
     diverPass = null;
@@ -1254,7 +1269,7 @@ function deepLureSite(direction) {
 
 function beginDeepLurePass() {
   const { scene, site, depth, direction, seed } = requestedScene;
-  const index = P.submersible ? P.submersible - 1 : 0;
+  const index = enabledModels[0];
   const lane = depth - .075;
   setVesselPass({
     index, start: { x: site - direction * .51, y: lane - .015 }, direction, startsAt: animationTime,
@@ -1324,7 +1339,7 @@ function drawShowcase(showcase, layer, light = null, surfaces = []) {
   if (layer !== 'overlay') {
     for (const icon of iconOccluders) ctx.clip(icon.path, 'evenodd');
   }
-  const lights = showcase.scene.draw(showcase, { ctx, W, H, night: nightAmount, seabed, models, modelWidth, light, surfaces }, layer);
+  const lights = showcase.scene.draw(showcase, { ctx, W, H, night: nightAmount, seabed, models, enabledModels, modelWidth, light, surfaces }, layer);
   ctx.restore();
   return lights;
 }
@@ -1336,12 +1351,12 @@ function advanceVessels() {
   }
   if (pass) return;
   if ((WALL || DEMO) && animationTime >= nextSceneAt) {
-    const eligible = desktopScenes.filter(({ lighting }) =>
-      lighting == null || (lighting === 1 ? nightAmount > .82 : nightAmount < .18));
+    const eligible = desktopScenes.filter(scene => sceneAvailable(scene) &&
+      (scene.lighting == null || (scene.lighting === 1 ? nightAmount > .82 : nightAmount < .18)));
     queueDesktopScene(eligible[Math.floor(Math.random() * eligible.length)]);
     return;
   }
-  if (animationTime < nextPassAt) return;
+  if (!enabledModels.length || animationTime < nextPassAt) return;
   beginPass();
 }
 
@@ -1719,10 +1734,10 @@ function scenerySurfaces(now, wake) {
 function draw(now) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
-  if (nightAmount < 1) ctx.drawImage(backdrop[0], 0, 0, cv.width, cv.height);
+  if (nightAmount < 1) ctx.drawImage(backdropAt(false), 0, 0);
   if (nightAmount > 0) {
     ctx.globalAlpha = nightAmount;
-    ctx.drawImage(backdrop[1], 0, 0, cv.width, cv.height);
+    ctx.drawImage(backdropAt(true), 0, 0);
     ctx.globalAlpha = 1;
   }
   ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
@@ -1808,7 +1823,7 @@ function resize() {
   cv._scale = PREVIEW ? .45 : devicePixelRatio || 1;
   cv.width = Math.max(1, Math.round(W * cv._scale));
   cv.height = Math.max(1, Math.round(H * cv._scale));
-  cacheBackdrop();
+  resetBackdrop();
   commit(true);
 }
 
@@ -1836,13 +1851,20 @@ function moveIconNode(node, icon) {
 }
 
 function applySettings(values) {
-  if (!Number.isFinite(values.submersible) && Number.isInteger(values.vessel)) {
-    values = { ...values, submersible: Math.max(0, values.vessel - 1) };
+  const selection = kelpModelMask(values);
+  const changeVessel = selection !== undefined && selection !== P.submersibles;
+  if (changeVessel) {
+    P.submersibles = selection;
+    enabledModels = modelIndices.filter(index => selection & (1 << index));
+    const excludedPass = pass && !enabledModels.includes(pass.index);
+    if (requestedScene && (excludedPass || !sceneAvailable(requestedScene.scene))) requestedScene = null;
+    if (excludedPass) setVesselPass(null);
+    if (!enabledModels.length) previousWake = null;
   }
   const limits = { adaptive: [0, 1], seed: [0, Number.MAX_SAFE_INTEGER], landscape: [KELP, SILT], lighting: [0, 2], kelpDensity: [.25, 1],
-    current: [0, 1.6], submersible: [0, models.length], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12] };
+    current: [0, 1.6], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12] };
   const previousSeed = P.seed;
-  let regenerate = false, changeVessel = false, changeLandscape = false, changeLighting = false;
+  let regenerate = false, changeLandscape = false, changeLighting = false;
   for (const [key, [low, high]] of Object.entries(limits)) {
     if (!Number.isFinite(values[key])) continue;
     let value = clamp(values[key], low, high);
@@ -1850,24 +1872,23 @@ function applySettings(values) {
     if (value === P[key]) continue;
     P[key] = value;
     regenerate ||= ['adaptive', 'seed', 'kelpDensity'].includes(key);
-    changeVessel ||= key === 'submersible';
     changeLandscape ||= key === 'landscape';
     changeLighting ||= key === 'lighting';
   }
-  if (P.seed !== previousSeed) cacheBackdrop();
+  if (P.seed !== previousSeed) resetBackdrop();
   if (changeLighting) updateLighting(performance.now(), true);
   if (changeLandscape || regenerate) commit(changeLandscape);
   if (!requestedScene && pass?.cinematic && (changeLandscape || nightAmount < .4)) {
     setVesselPass(null);
     nextPassAt = animationTime + 2;
   }
-  if (!requestedScene && (changeVessel || (changeLandscape && PREVIEW && !previewMotion))) beginPass(PREVIEW && !previewMotion);
+  if (!requestedScene && ((changeVessel && !pass) || (changeLandscape && PREVIEW && !previewMotion))) beginPass(PREVIEW && !previewMotion);
 }
 
 function handle(message) {
   switch (message.t) {
     case 'settings': applySettings(message.v || {}); break;
-    case 'reset': applySettings({ ...DEFAULTS, ...message.v }); break;
+    case 'reset': applySettings({ ...DEFAULTS, ...message.v, submersibles: kelpModelMask(message.v || {}) ?? allKelpModels }); break;
     case 'environment':
       DynamicDesktopEnvironment.environment(message.v);
       if (P.lighting === 2) updateLighting(performance.now(), true);
@@ -1917,28 +1938,8 @@ function handle(message) {
 function loadSprite(model) {
   const image = new Image();
   image.onload = () => {
-    // Rasterize a small sprite once and trim transparent padding from its bounds.
-    const sample = document.createElement('canvas');
-    sample.width = 336;
-    sample.height = Math.max(1, Math.round(sample.width * image.naturalHeight / image.naturalWidth));
-    const sampleContext = sample.getContext('2d', { willReadFrequently: true });
-    sampleContext.drawImage(image, 0, 0, sample.width, sample.height);
-    const pixels = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
-    let left = sample.width, right = -1, top = sample.height, bottom = -1;
-    for (let y = 0; y < sample.height; y++) {
-      for (let x = 0; x < sample.width; x++) {
-        if (pixels[(y * sample.width + x) * 4 + 3] < 32) continue;
-        left = Math.min(left, x); right = Math.max(right, x);
-        top = Math.min(top, y); bottom = Math.max(bottom, y);
-      }
-    }
-    if (right < left || bottom < top) return;
-    left = Math.max(0, left - 2); right = Math.min(sample.width - 1, right + 2);
-    top = Math.max(0, top - 2); bottom = Math.min(sample.height - 1, bottom + 2);
-    model.sprite = document.createElement('canvas');
-    model.sprite.width = right - left + 1;
-    model.sprite.height = bottom - top + 1;
-    model.sprite.getContext('2d').drawImage(sample, left, top, model.sprite.width, model.sprite.height, 0, 0, model.sprite.width, model.sprite.height);
+    // The packaged sprites are already trimmed to their visible hulls.
+    model.sprite = image;
     model.distantSprite = document.createElement('canvas');
     model.distantSprite.width = model.sprite.width;
     model.distantSprite.height = model.sprite.height;
