@@ -2,13 +2,14 @@ name: Package DynamicDesktop v0.1.13
 on:
   push:
     branches: ['release-build/v0.1.13']
-    paths: ['nsis-3.13.zip']
+    paths: ['nsis-3.13.zip', '.github/workflows/package-v0.1.13.yml']
 
 permissions:
   contents: write
 
 jobs:
   package:
+    if: "!contains(github.event.head_commit.modified, '.github/workflows/package-v0.1.13.yml')"
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
@@ -60,3 +61,37 @@ jobs:
           '@ | Set-Content -Encoding utf8 'dist/release-notes.md'
           gh release create v0.1.13 --repo 'Timminater/DynamicDesktop' --target '2cc8c206f6bb1fbfcb8d3f2ab20af33135a24250' --draft --title 'DynamicDesktop v0.1.13' --notes-file 'dist/release-notes.md' 'dist/DynamicDesktop-0.1.13-win-x64-Setup.exe' 'dist/DynamicDesktop-0.1.13-win-x64-Setup.exe.sha256' 'dist/DynamicDesktop-source.zip' 'dist/DynamicDesktop-source.zip.sha256'
           if ($LASTEXITCODE -ne 0) { throw 'Release draft or asset upload failed' }
+
+  publish:
+    if: contains(github.event.head_commit.modified, '.github/workflows/package-v0.1.13.yml')
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Publish the validated DynamicDesktop v0.1.13 draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $repo = 'Timminater/DynamicDesktop'
+          $target = '2cc8c206f6bb1fbfcb8d3f2ab20af33135a24250'
+          $main = gh api "repos/$repo/commits/main" --jq '.sha'
+          if ($main -ne $target) { throw 'Unexpected main commit' }
+          $draft = gh api "repos/$repo/releases/455289995" | ConvertFrom-Json
+          if (-not $draft.draft -or $draft.prerelease -or $draft.tag_name -ne 'v0.1.13' -or $draft.target_commitish -ne $target) {
+            throw 'Unexpected release draft'
+          }
+          $expected = @{
+            'DynamicDesktop-0.1.13-win-x64-Setup.exe' = 'a62781021ff3f959ca4a672f7a170505f52ca9bc210e2a30d7f413559c71a0e0'
+            'DynamicDesktop-0.1.13-win-x64-Setup.exe.sha256' = '672f7b416edca4e7d3658682045f011fc328a9e787efd2c2427bd3ca830583e2'
+            'DynamicDesktop-source.zip' = '37c0f8d09795e142e313fe836e0690d810e2c29aa50918fe97675bd6910fc5f5'
+            'DynamicDesktop-source.zip.sha256' = '166f084fa422dd0c0e3e5de51f08315824b2521be64e415fe478f7887de1db5b'
+          }
+          if ($draft.assets.Count -ne $expected.Count) { throw 'Unexpected release asset count' }
+          foreach ($asset in $draft.assets) {
+            if (-not $expected.ContainsKey($asset.name) -or $asset.digest -ne "sha256:$($expected[$asset.name])" -or $asset.state -ne 'uploaded') {
+              throw "Unexpected release asset $($asset.name)"
+            }
+          }
+          gh release edit v0.1.13 --repo $repo --draft=false --latest
