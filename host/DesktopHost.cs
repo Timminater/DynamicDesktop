@@ -16,6 +16,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -316,6 +317,8 @@ class HostContext : ApplicationContext
     WallpaperForm form, deadForm;
     bool rebuilding;
     string displaySignature = "";
+    DateTime displayStableAt = DateTime.MinValue;
+    int controllerRetries;
     SettingsForm settingsWin;
     DateTime nextStart = DateTime.MaxValue, saveDue = DateTime.MaxValue;
     bool manualPause, exiting;
@@ -817,7 +820,7 @@ class HostContext : ApplicationContext
         }
         Screen[] displays = Screen.AllScreens;
         displaySignature = DisplaySignature(displays);
-        var f = new WallpaperForm(pageDir, page, manualPause, Array.ConvertAll(displays, s => s.Bounds));
+        var f = new WallpaperForm(pageDir, page, manualPause, Array.ConvertAll(displays, s => s.Bounds), controllerRetries < 2);
         form = f;
         f.SettingsJson = SettingsMessage;
         f.EnvironmentJson = EnvironmentMessage;
@@ -836,13 +839,19 @@ class HostContext : ApplicationContext
         return string.Join("|", parts.ToArray());
     }
 
-    void RebuildForm()
+    void WatchDisplayLayout(DateTime now)
     {
+        string signature = DisplaySignature(Screen.AllScreens);
+        if (signature == displaySignature) return;
+        // Docking can produce several layouts in succession, including while no wallpaper exists.
+        displaySignature = signature;
+        displayStableAt = now.AddSeconds(2);
+        controllerRetries = 0;
+        nextStart = now;
         rebuilding = true;
         if (form != null) form.Shutdown();
         form = null;
         rebuilding = false;
-        nextStart = DateTime.Now.AddMilliseconds(500);
     }
 
     void OnFormGone(object sender, EventArgs e)
@@ -854,6 +863,16 @@ class HostContext : ApplicationContext
         if (rebuilding) return;
         if (exiting) return;
         if (f.Fatal) { Exit(); return; }
+
+        if (f.RetryStartup)
+        {
+            controllerRetries++;
+            int delay = 2 * controllerRetries;
+            Log.Write(string.Format("Retrying wallpaper controller startup in {0} seconds (retry {1}/2)", delay, controllerRetries));
+            nextStart = DateTime.Now.AddSeconds(delay);
+            return;
+        }
+        if (f.ControllerReady) controllerRetries = 0;
 
         // Stop retrying after repeated destruction to avoid fighting Explorer.
         restarts.Enqueue(DateTime.Now);
@@ -1080,8 +1099,9 @@ class HostContext : ApplicationContext
         if (menuEvent.WaitOne(0)) ShowMenu();
         if (settingsEvent.WaitOne(0)) OpenSettings();
         if (DateTime.Now >= saveDue) { saveDue = DateTime.MaxValue; Settings.Save(); }
-        if (form != null && DisplaySignature(Screen.AllScreens) != displaySignature) RebuildForm();
-        if (form == null && !exiting && DateTime.Now >= nextStart) StartForm();
+        DateTime now = DateTime.Now;
+        if (!exiting && (form == null || !form.Fatal)) WatchDisplayLayout(now);
+        if (form == null && !exiting && now >= nextStart && now >= displayStableAt) StartForm();
         WatchUpdates();
     }
 
@@ -1193,6 +1213,67 @@ static class AppIcon
     }
 }
 
+static class WebViewStartup
+{
+    const int ResourceInUse = unchecked((int)0x800700AA);
+    const int Timeout = unchecked((int)0x800705B4);
+    static readonly SemaphoreSlim ControllerGate = new SemaphoreSlim(1, 1);
+
+    public static bool IsTransient(Exception error)
+    {
+        return error.HResult == ResourceInUse || error.HResult == Timeout;
+    }
+
+    // Both forms use the same WebView2 profile. Keep controller creation on the UI thread
+    // and serialize it across windows, even when a display change replaces the wallpaper.
+    public static async Task EnsureControllerAsync(WebView2 web)
+    {
+        await ControllerGate.WaitAsync();
+        try
+        {
+            if (web.IsDisposed) throw new OperationCanceledException();
+            var disposed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            EventHandler onDisposed = delegate { disposed.TrySetResult(true); };
+            web.Disposed += onDisposed;
+            using (var timer = new CancellationTokenSource())
+            {
+                try
+                {
+                    Task creation = web.EnsureCoreWebView2Async(null);
+                    Task deadline = Task.Delay(TimeSpan.FromSeconds(30), timer.Token);
+                    if (await Task.WhenAny(creation, deadline, disposed.Task) == creation)
+                    {
+                        await creation;
+                        return;
+                    }
+
+                    ObserveAbandonedCreation(creation);
+                    if (web.IsDisposed) throw new OperationCanceledException();
+                    throw new COMException("WebView2 controller initialization timed out after 30 seconds.", Timeout);
+                }
+                catch
+                {
+                    // A fresh control is required after a failed or abandoned initialization.
+                    if (!web.IsDisposed) web.Dispose();
+                    throw;
+                }
+                finally
+                {
+                    web.Disposed -= onDisposed;
+                    timer.Cancel();
+                }
+            }
+        }
+        finally { ControllerGate.Release(); }
+    }
+
+    static async void ObserveAbandonedCreation(Task creation)
+    {
+        try { await creation.ConfigureAwait(false); }
+        catch (Exception ex) { Log.Write("Abandoned WebView2 initialization ended: " + ex.Message); }
+    }
+}
+
 // Normal desktop settings window hosting prototype/settings.html in WebView2.
 class SettingsForm : Form
 {
@@ -1258,7 +1339,7 @@ class SettingsForm : Form
         base.OnShown(e);
         try
         {
-            await web.EnsureCoreWebView2Async(null);
+            await WebViewStartup.EnsureControllerAsync(web);
             if (IsDisposed) return;
             var core = web.CoreWebView2;
             core.SetVirtualHostNameToFolderMapping("app.local", pageDir, CoreWebView2HostResourceAccessKind.Allow);
@@ -1276,6 +1357,7 @@ class SettingsForm : Form
         }
         catch (Exception ex)
         {
+            if (IsDisposed || Disposing) return;
             Log.Write("Failed to open the settings window: " + ex);
             MessageBox.Show(I18n.T("errSettings", "msg", ex.Message), "DynamicDesktop");
             Close();
@@ -1320,7 +1402,10 @@ class WallpaperForm : Form
     Point lastPointer;
     DateTime lastIconPoll = DateTime.MinValue;
 
+    readonly bool allowStartupRetry;
     public bool Fatal { get; private set; }
+    public bool RetryStartup { get; private set; }
+    public bool ControllerReady { get; private set; }
     public bool IsSharing { get { return recordDone != null || snapshotDone != null; } }
 
     string page;                                        // Current theme page (the page field in themes.json).
@@ -1331,11 +1416,12 @@ class WallpaperForm : Form
     public Rectangle SpanBounds { get { return desktopBounds; } }
     protected override bool ShowWithoutActivation { get { return true; } }
 
-    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle[] displays)
+    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle[] displays, bool allowStartupRetry)
     {
         this.pageDir = pageDir;
         this.page = page;
         this.manualPause = manualPause;
+        this.allowStartupRetry = allowStartupRetry;
         monitors = displays.Length == 0 ? new[] { SystemInformation.VirtualScreen } : displays;
         desktopBounds = monitors[0];
         for (int i = 1; i < monitors.Length; i++) desktopBounds = Rectangle.Union(desktopBounds, monitors[i]);
@@ -1518,8 +1604,9 @@ class WallpaperForm : Form
                 Fail(I18n.T("errNoDesktop"));
                 return;
             }
-            await web.EnsureCoreWebView2Async(null);
+            await WebViewStartup.EnsureControllerAsync(web);
             if (shuttingDown || IsDisposed) return;
+            ControllerReady = true;
             var core = web.CoreWebView2;
             core.SetVirtualHostNameToFolderMapping("app.local", pageDir, CoreWebView2HostResourceAccessKind.Allow);
             core.Settings.AreDefaultContextMenusEnabled = false;
@@ -1548,15 +1635,21 @@ class WallpaperForm : Form
         {
             if (shuttingDown || IsDisposed) return;       // The system destroyed the window during startup; let HostContext retry.
             Log.Write("Startup failed: " + ex);
+            if (!ControllerReady && allowStartupRetry && WebViewStartup.IsTransient(ex))
+            {
+                RetryStartup = true;
+                Shutdown();
+                return;
+            }
             Fail(I18n.T("errStart", "msg", ex.Message));
         }
     }
 
     void Fail(string msg)
     {
+        Fatal = true;
         Log.Write(msg);
         MessageBox.Show(msg + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "DynamicDesktop");
-        Fatal = true;
         Shutdown();
     }
 
