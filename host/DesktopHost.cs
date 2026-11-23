@@ -315,10 +315,10 @@ class HostContext : ApplicationContext
     readonly DesktopMouseHook mouseHook;
     readonly Queue<DateTime> restarts = new Queue<DateTime>();
     WallpaperForm form, deadForm;
-    bool rebuilding;
     string displaySignature = "";
     DateTime displayStableAt = DateTime.MinValue;
     int controllerRetries;
+    static readonly int[] ControllerRetryDelaysSeconds = { 2, 4, 10, 30, 60 };
     SettingsForm settingsWin;
     DateTime nextStart = DateTime.MaxValue, saveDue = DateTime.MaxValue;
     bool manualPause, exiting;
@@ -820,7 +820,7 @@ class HostContext : ApplicationContext
         }
         Screen[] displays = Screen.AllScreens;
         displaySignature = DisplaySignature(displays);
-        var f = new WallpaperForm(pageDir, page, manualPause, Array.ConvertAll(displays, s => s.Bounds), controllerRetries < 2);
+        var f = new WallpaperForm(pageDir, page, manualPause, Array.ConvertAll(displays, s => s.Bounds));
         form = f;
         f.SettingsJson = SettingsMessage;
         f.EnvironmentJson = EnvironmentMessage;
@@ -841,17 +841,28 @@ class HostContext : ApplicationContext
 
     void WatchDisplayLayout(DateTime now)
     {
-        string signature = DisplaySignature(Screen.AllScreens);
-        if (signature == displaySignature) return;
-        // Docking can produce several layouts in succession, including while no wallpaper exists.
-        displaySignature = signature;
-        displayStableAt = now.AddSeconds(2);
-        controllerRetries = 0;
-        nextStart = now;
-        rebuilding = true;
-        if (form != null) form.Shutdown();
-        form = null;
-        rebuilding = false;
+        Screen[] displays = Screen.AllScreens;
+        string signature = DisplaySignature(displays);
+        if (signature != displaySignature)
+        {
+            // Docking can produce several layouts in succession, including while no wallpaper exists.
+            displaySignature = signature;
+            displayStableAt = now.AddSeconds(2);
+        }
+        if (displayStableAt == DateTime.MinValue || now < displayStableAt) return;
+        displayStableAt = DateTime.MinValue;
+
+        var wallpaper = form;
+        if (wallpaper == null) return;
+        if (wallpaper.TryUpdateDisplayLayout(Array.ConvertAll(displays, s => s.Bounds)))
+        {
+            if (form == wallpaper && settingsWin != null)
+                settingsWin.Post(Json.Stringify(Json.Obj("t", "display", "screen", ScreenSize(wallpaper.SpanBounds))));
+            return;
+        }
+
+        Log.Write("Could not resize the attached wallpaper window; remounting it");
+        wallpaper.Shutdown();
     }
 
     void OnFormGone(object sender, EventArgs e)
@@ -860,32 +871,32 @@ class HostContext : ApplicationContext
         if (f != form) return;
         form = null;
         deadForm = f;
-        if (rebuilding) return;
         if (exiting) return;
         if (f.Fatal) { Exit(); return; }
 
         if (f.RetryStartup)
         {
-            controllerRetries++;
-            int delay = 2 * controllerRetries;
-            Log.Write(string.Format("Retrying wallpaper controller startup in {0} seconds (retry {1}/2)", delay, controllerRetries));
+            int delay = ControllerRetryDelaysSeconds[controllerRetries];
+            controllerRetries = Math.Min(controllerRetries + 1, ControllerRetryDelaysSeconds.Length - 1);
+            Log.Write(string.Format("Retrying wallpaper startup in {0} seconds", delay));
             nextStart = DateTime.Now.AddSeconds(delay);
             return;
         }
         if (f.ControllerReady) controllerRetries = 0;
 
-        // Stop retrying after repeated destruction to avoid fighting Explorer.
-        restarts.Enqueue(DateTime.Now);
-        while (restarts.Count > 0 && (DateTime.Now - restarts.Peek()).TotalSeconds > 60) restarts.Dequeue();
+        // Let the shell settle after repeated remounts without exiting the tray or blocking its message loop.
+        DateTime now = DateTime.Now;
+        restarts.Enqueue(now);
+        while (restarts.Count > 0 && (now - restarts.Peek()).TotalSeconds > 60) restarts.Dequeue();
         if (restarts.Count > 5)
         {
-            Log.Write("Wallpaper window was destroyed over five times in one minute; stopping retries");
-            MessageBox.Show(I18n.T("errRebuilt") + "\n\n" + I18n.T("errSeeLog", "path", Log.FilePath), "DynamicDesktop");
-            Exit();
+            restarts.Clear();
+            Log.Write("Wallpaper window closed over five times in one minute; retrying in 60 seconds");
+            nextStart = now.AddSeconds(60);
             return;
         }
-        Log.Write("Explorer destroyed the wallpaper window; reattaching in one second");
-        nextStart = DateTime.Now.AddSeconds(1);
+        Log.Write("Wallpaper window closed; reattaching in one second");
+        nextStart = now.AddSeconds(1);
     }
 
     static string RegisteredInstallDirectory()
@@ -1224,6 +1235,12 @@ static class WebViewStartup
         return error.HResult == ResourceInUse || error.HResult == Timeout;
     }
 
+    public static bool RequiresRecreation(CoreWebView2ProcessFailedKind kind)
+    {
+        return kind == CoreWebView2ProcessFailedKind.BrowserProcessExited ||
+            kind == CoreWebView2ProcessFailedKind.RenderProcessExited;
+    }
+
     // Both forms use the same WebView2 profile. Keep controller creation on the UI thread
     // and serialize it across windows, even when a display change replaces the wallpaper.
     public static async Task EnsureControllerAsync(WebView2 web)
@@ -1346,6 +1363,12 @@ class SettingsForm : Form
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsZoomControlEnabled = false;
+            core.ProcessFailed += delegate(object s, CoreWebView2ProcessFailedEventArgs a)
+            {
+                if (!WebViewStartup.RequiresRecreation(a.ProcessFailedKind) || !IsHandleCreated || Disposing) return;
+                Log.Write("Settings WebView2 process failed: " + a.ProcessFailedKind);
+                BeginInvoke((MethodInvoker)delegate { if (!IsDisposed && !Disposing) Close(); });
+            };
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs a)
             {
                 try { host.OnSettingsMessage(a.TryGetWebMessageAsString()); }
@@ -1388,8 +1411,8 @@ class WallpaperForm : Form
     readonly System.Windows.Forms.Timer iconTimer, fgTimer, pointerTimer;
     readonly string pageDir;
     readonly IconReader reader = new IconReader();
-    readonly Rectangle[] monitors;
-    readonly Rectangle desktopBounds;
+    Rectangle[] monitors;
+    Rectangle desktopBounds;
     IntPtr parentHwnd, insertAfter;
     string lastIcons = "";
     string lastMasks = "";
@@ -1402,7 +1425,7 @@ class WallpaperForm : Form
     Point lastPointer;
     DateTime lastIconPoll = DateTime.MinValue;
 
-    readonly bool allowStartupRetry;
+    bool webRecoveryPending;
     public bool Fatal { get; private set; }
     public bool RetryStartup { get; private set; }
     public bool ControllerReady { get; private set; }
@@ -1416,15 +1439,13 @@ class WallpaperForm : Form
     public Rectangle SpanBounds { get { return desktopBounds; } }
     protected override bool ShowWithoutActivation { get { return true; } }
 
-    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle[] displays, bool allowStartupRetry)
+    public WallpaperForm(string pageDir, string page, bool manualPause, Rectangle[] displays)
     {
         this.pageDir = pageDir;
         this.page = page;
         this.manualPause = manualPause;
-        this.allowStartupRetry = allowStartupRetry;
-        monitors = displays.Length == 0 ? new[] { SystemInformation.VirtualScreen } : displays;
-        desktopBounds = monitors[0];
-        for (int i = 1; i < monitors.Length; i++) desktopBounds = Rectangle.Union(desktopBounds, monitors[i]);
+        monitors = NormalizeDisplays(displays);
+        desktopBounds = DisplayBounds(monitors);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -1447,6 +1468,41 @@ class WallpaperForm : Form
         pointerTimer = new System.Windows.Forms.Timer();
         pointerTimer.Interval = 75;
         pointerTimer.Tick += delegate { PollWildlifePointer(); };
+    }
+
+    static Rectangle[] NormalizeDisplays(Rectangle[] displays)
+    {
+        return displays.Length == 0 ? new[] { SystemInformation.VirtualScreen } : displays;
+    }
+
+    static Rectangle DisplayBounds(Rectangle[] displays)
+    {
+        Rectangle bounds = displays[0];
+        for (int i = 1; i < displays.Length; i++) bounds = Rectangle.Union(bounds, displays[i]);
+        return bounds;
+    }
+
+    public bool TryUpdateDisplayLayout(Rectangle[] displays)
+    {
+        if (shuttingDown || !IsHandleCreated || !Native.IsWindow(parentHwnd) || Native.GetParent(Handle) != parentHwnd)
+            return false;
+
+        displays = NormalizeDisplays(displays);
+        Rectangle bounds = DisplayBounds(displays);
+        // Resize the attached HWND so WebView2 keeps its controller and the page receives a normal resize event.
+        if (!PositionOnDesktop(bounds, Native.SWP_NOZORDER)) return false;
+        monitors = displays;
+        desktopBounds = bounds;
+        lastIcons = "";
+        RefreshIconMasks();
+        if (lastMasks.Length != 0)
+        {
+            lastMasks = "";
+            Post("{\"t\":\"iconMasks\",\"v\":[]}");
+        }
+        ClearWildlifePointer();
+        Log.Write(string.Format("Resized wallpaper in place, desktop {0} across {1} monitor(s)", desktopBounds, monitors.Length));
+        return true;
     }
 
     public void SetManualPause(bool v) { manualPause = v; PollForeground(); }
@@ -1494,7 +1550,7 @@ class WallpaperForm : Form
     System.Windows.Forms.Timer snapshotTimeout;
     public void RequestSnapshot(Action<string, string, string> done)
     {
-        if (web.CoreWebView2 == null) { done(null, null, I18n.T("errNotReady")); return; }
+        if (shuttingDown || webRecoveryPending || web.CoreWebView2 == null) { done(null, null, I18n.T("errNotReady")); return; }
         if (snapshotDone != null) { done(null, null, I18n.T("errBusyImage")); return; }
         snapshotDone = done;
         snapshotTimeout = new System.Windows.Forms.Timer();
@@ -1526,7 +1582,7 @@ class WallpaperForm : Form
     public event Action<string> RecordProgress;            // 0..1 (string)
     public void RequestRecording(Action<string, string, string, string> done)
     {
-        if (web.CoreWebView2 == null) { done(null, null, null, I18n.T("errNotReady")); return; }
+        if (shuttingDown || webRecoveryPending || web.CoreWebView2 == null) { done(null, null, null, I18n.T("errNotReady")); return; }
         if (recordDone != null) { done(null, null, null, I18n.T("errBusyVideo")); return; }
         recordDone = done;
         recordTimeout = new System.Windows.Forms.Timer();
@@ -1570,8 +1626,21 @@ class WallpaperForm : Form
     // A null check cannot detect this. Use the existing destroyed-wallpaper-window recovery path: tear down this window and let HostContext rebuild it after one second.
     void WebDead(Exception ex)
     {
-        if (shuttingDown) return;
-        Log.Write("WebView2 became unavailable (runtime update or process exit); remounting the wallpaper window: " + ex.Message);
+        QueueWebRecovery(ex.Message);
+    }
+
+    void QueueWebRecovery(string reason)
+    {
+        if (shuttingDown || webRecoveryPending || !IsHandleCreated) return;
+        webRecoveryPending = true;
+        Log.Write("WebView2 became unavailable; remounting the wallpaper window: " + reason);
+        // Leave WebView2's event callback before disposing its controller.
+        BeginInvoke((MethodInvoker)Shutdown);
+    }
+
+    void RetryWallpaperStartup()
+    {
+        RetryStartup = true;
         Shutdown();
     }
     string PageUrl { get { return "https://app.local/" + page + (page.Contains("?") ? "&" : "?") + "wallpaper=1"; } }
@@ -1601,7 +1670,8 @@ class WallpaperForm : Form
             }
             if (!AttachToDesktop())
             {
-                Fail(I18n.T("errNoDesktop"));
+                Log.Write("Wallpaper desktop layer is unavailable");
+                RetryWallpaperStartup();
                 return;
             }
             await WebViewStartup.EnsureControllerAsync(web);
@@ -1612,6 +1682,10 @@ class WallpaperForm : Form
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreDevToolsEnabled = true;
             core.Settings.IsStatusBarEnabled = false;
+            core.ProcessFailed += delegate(object s, CoreWebView2ProcessFailedEventArgs a)
+            {
+                if (WebViewStartup.RequiresRecreation(a.ProcessFailedKind)) QueueWebRecovery(a.ProcessFailedKind.ToString());
+            };
             // When the page sends "ready", send settings first, then icons and pause state; shoreline calculations need the configured offshore distance.
             // For one-click sharing, the page sends "snapshot|thumbnail|full PNG" as data URLs; the full image is too large to send as JSON.
             core.WebMessageReceived += delegate(object s, CoreWebView2WebMessageReceivedEventArgs a)
@@ -1621,8 +1695,9 @@ class WallpaperForm : Form
                 if (msg != null && msg.StartsWith("snapshot|")) { OnSnapshot(msg); return; }
                 if (msg != null && msg.StartsWith("recprogress|")) { if (RecordProgress != null) RecordProgress(msg.Substring(12)); return; }
                 if (msg != null && msg.StartsWith("record|")) { OnRecord(msg); return; }
-                if (SettingsJson != null) core.PostWebMessageAsString(SettingsJson());
-                if (EnvironmentJson != null) core.PostWebMessageAsString(EnvironmentJson());
+                if (msg != "ready" || shuttingDown || webRecoveryPending) return;
+                if (SettingsJson != null) Post(SettingsJson());
+                if (EnvironmentJson != null) Post(EnvironmentJson());
                 lastIcons = ""; lastMasks = ""; lastMaskPoll = DateTime.MinValue; lastPause = -1; pointerActive = false;
                 PollIcons(); PollForeground();
             };
@@ -1635,10 +1710,9 @@ class WallpaperForm : Form
         {
             if (shuttingDown || IsDisposed) return;       // The system destroyed the window during startup; let HostContext retry.
             Log.Write("Startup failed: " + ex);
-            if (!ControllerReady && allowStartupRetry && WebViewStartup.IsTransient(ex))
+            if (!ControllerReady && WebViewStartup.IsTransient(ex))
             {
-                RetryStartup = true;
-                Shutdown();
+                RetryWallpaperStartup();
                 return;
             }
             Fail(I18n.T("errStart", "msg", ex.Message));
@@ -1663,6 +1737,7 @@ class WallpaperForm : Form
     public static string AttachMode = "progman";
     bool raised;
     IntPtr zAnchor;                                     // Window immediately above ours (icon list / icon layer).
+    string zAnchorClass;
     IntPtr winEventHook;
     Native.WinEventDelegate winEventProc;               // Keep a reference to prevent garbage collection.
 
@@ -1709,11 +1784,13 @@ class WallpaperForm : Form
             {
                 // Experimental: attach inside the icon layer below the icon list. Wallpaper changes do not reorder it, but drawing did not work on 24H2 in testing.
                 parentHwnd = defView; insertAfter = listView; zAnchor = listView;
+                zAnchorClass = "SysListView32";
                 mode = "24H2+: layered child of the icon layer (DefView), below the icon list";
             }
             else
             {
                 parentHwnd = progman; insertAfter = defView; zAnchor = defView;
+                zAnchorClass = "SHELLDLL_DefView";
                 mode = "24H2+: layered child of Progman, below the icon layer";
             }
             if (raised)
@@ -1746,18 +1823,7 @@ class WallpaperForm : Form
             return false;
         }
 
-        var pt = new Native.POINT { X = desktopBounds.X, Y = desktopBounds.Y };
-        if (!Native.ScreenToClient(parentHwnd, ref pt))
-        {
-            Log.Write("Could not translate the wallpaper bounds to desktop client coordinates");
-            return false;
-        }
-        if (!Native.SetWindowPos(Handle, insertAfter, pt.X, pt.Y, desktopBounds.Width, desktopBounds.Height,
-            Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | Native.SWP_FRAMECHANGED))
-        {
-            Log.Write("Could not position the wallpaper across the desktop: " + desktopBounds + ", error " + Marshal.GetLastWin32Error());
-            return false;
-        }
+        if (!PositionOnDesktop(desktopBounds, Native.SWP_SHOWWINDOW | Native.SWP_FRAMECHANGED)) return false;
         WallpaperWindows.Add(Handle);
         EnsureZOrder();
 
@@ -1780,11 +1846,30 @@ class WallpaperForm : Form
         return true;
     }
 
+    bool PositionOnDesktop(Rectangle bounds, uint flags)
+    {
+        var pt = new Native.POINT { X = bounds.X, Y = bounds.Y };
+        if (!Native.ScreenToClient(parentHwnd, ref pt))
+        {
+            Log.Write("Could not translate the wallpaper bounds to desktop client coordinates");
+            return false;
+        }
+        if (Native.SetWindowPos(Handle, insertAfter, pt.X, pt.Y, bounds.Width, bounds.Height, Native.SWP_NOACTIVATE | flags))
+            return true;
+        Log.Write("Could not position the wallpaper across the desktop: " + bounds + ", error " + Marshal.GetLastWin32Error());
+        return false;
+    }
+
     // Keep this window immediately below zAnchor (icon list / icon layer). For Progman, also move the system wallpaper layer to the bottom when the order changes.
     int zFixes;
     void EnsureZOrder()
     {
-        if (!raised || zAnchor == IntPtr.Zero || !Native.IsWindow(zAnchor)) return;
+        if (!raised) return;
+        if (zAnchor == IntPtr.Zero || Native.GetParent(zAnchor) != parentHwnd)
+        {
+            zAnchor = Native.FindWindowEx(parentHwnd, IntPtr.Zero, zAnchorClass, null);
+            if (zAnchor == IntPtr.Zero) return;
+        }
         bool fixedAny = false;
         IntPtr next = Native.GetWindow(zAnchor, 2 /* GW_HWNDNEXT */);
         while (next != IntPtr.Zero && next != Handle && WallpaperWindows.Contains(next)) next = Native.GetWindow(next, 2);
@@ -1893,7 +1978,7 @@ class WallpaperForm : Form
                 {
                     maskInFlight = false;
                     if (shuttingDown || !Settings.IconShadowsEnabled()) return;
-                    if (lastIcons != expectedIcons) { iconsDirty = true; lastMaskPoll = DateTime.MinValue; return; }
+                    if (desktopBounds != bounds || lastIcons != expectedIcons) { RefreshIconMasks(); return; }
                     if (masks != null && masks != lastMasks) { lastMasks = masks; Post(masks); }
                 });
             }
@@ -1925,6 +2010,7 @@ class WallpaperForm : Form
         if (shuttingDown) return;
         shuttingDown = true;
         iconTimer.Stop(); fgTimer.Stop(); pointerTimer.Stop();
+        CancelSharing();
         reader.Dispose();
         IntPtr parent = parentHwnd;
         try { web.Dispose(); } catch { }
@@ -1937,11 +2023,21 @@ class WallpaperForm : Form
 
     protected override void OnHandleDestroyed(EventArgs e)
     {
+        shuttingDown = true;
         WallpaperWindows.Remove(Handle);
         if (winEventHook != IntPtr.Zero) { Native.UnhookWinEvent(winEventHook); winEventHook = IntPtr.Zero; }
         iconTimer.Stop(); fgTimer.Stop(); pointerTimer.Stop();
+        CancelSharing();
         reader.Dispose();
         base.OnHandleDestroyed(e);
+    }
+
+    void CancelSharing()
+    {
+        if (!IsSharing) return;
+        string error = I18n.T("errNotReady");
+        FinishSnapshot(null, null, error);
+        FinishRecord(null, null, null, error);
     }
 }
 
@@ -2152,7 +2248,7 @@ class IconReader : IDisposable
 static class Native
 {
     public const int GWL_STYLE = -16, GWL_EXSTYLE = -20, WS_EX_LAYERED = 0x00080000;
-    public const uint LWA_ALPHA = 0x2, SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002;
+    public const uint LWA_ALPHA = 0x2, SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004;
     public const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
     public const int SW_SHOW = 5, SW_RESTORE = 9;
     [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint modifiers, uint vk);
