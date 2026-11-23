@@ -22,8 +22,24 @@ jobs:
           New-Item -ItemType Directory -Force host/lib, dist/installer-tools | Out-Null
           Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4191.47/microsoft.web.webview2.1.0.4191.47.nupkg' -OutFile 'host/lib/Microsoft.Web.WebView2.1.0.4191.47.nupkg'
           $nsisZip = 'dist/installer-tools/nsis-3.13.zip'
-          Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $nsisZip
-          if ((Get-FileHash $nsisZip).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') { throw 'Invalid NSIS archive checksum' }
+          $nsisChecksum = 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8'
+          $nsisPath = 'project/nsis/NSIS%203/3.13/nsis-3.13.zip'
+          $verified = $false
+          foreach ($mirror in 'master', 'netix', 'netcologne', 'phoenixnap', 'cytranet', 'versaweb') {
+            try {
+              Invoke-WebRequest "https://$mirror.dl.sourceforge.net/${nsisPath}?viasf=1" -OutFile $nsisZip -TimeoutSec 25
+              $observed = (Get-FileHash $nsisZip).Hash
+              if ($observed -eq $nsisChecksum) {
+                Write-Host "Verified NSIS archive from $mirror"
+                $verified = $true
+                break
+              }
+              Write-Host "NSIS mirror $mirror returned $observed ($((Get-Item $nsisZip).Length) bytes)"
+            } catch {
+              Write-Host "NSIS mirror ${mirror}: $($_.Exception.Message)"
+            }
+          }
+          if (!$verified) { throw 'No NSIS mirror returned the pinned archive' }
           Expand-Archive $nsisZip -DestinationPath 'dist/installer-tools'
       - name: Build and verify installer and source
         shell: powershell
