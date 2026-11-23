@@ -1,0 +1,55 @@
+name: Package DynamicDesktop v0.1.13
+on:
+  push:
+    branches: ['release-build/v0.1.13']
+    paths: ['.github/workflows/package-v0.1.13.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 2cc8c206f6bb1fbfcb8d3f2ab20af33135a24250
+          persist-credentials: false
+      - name: Fetch pinned build dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force host/lib, dist/installer-tools | Out-Null
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4191.47/microsoft.web.webview2.1.0.4191.47.nupkg' -OutFile 'host/lib/Microsoft.Web.WebView2.1.0.4191.47.nupkg'
+          $nsisZip = 'dist/installer-tools/nsis-3.13.zip'
+          Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $nsisZip
+          if ((Get-FileHash $nsisZip).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') { throw 'Invalid NSIS archive checksum' }
+          Expand-Archive $nsisZip -DestinationPath 'dist/installer-tools'
+      - name: Build and verify installer and source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\tools\build-installer.ps1 -NsisCompiler 'dist/installer-tools/nsis-3.13/makensis.exe'
+          $hostVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'host/bin/DynamicDesktop.exe').Path).FileVersion
+          if ($hostVersion -ne '0.1.13.0') { throw "Unexpected host version $hostVersion" }
+          foreach ($asset in 'DynamicDesktop-0.1.13-win-x64-Setup.exe', 'DynamicDesktop-source.zip') {
+            $path = Join-Path dist $asset
+            $hash = (Get-FileHash $path).Hash
+            if ((Get-Content -Raw "$path.sha256").Trim() -ne "$hash  $asset") { throw "Checksum mismatch for $asset" }
+            Write-Host "$asset SHA-256 $hash"
+          }
+      - name: Attach verified files to release draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          ## Display changes and WebView2 recovery
+
+          - DynamicDesktop waits for the display layout to settle before remounting the wallpaper when you dock, undock, or change monitors.
+          - Wallpaper and Settings initialize WebView2 one at a time. If the wallpaper controller is busy or times out, DynamicDesktop cleans up and retries up to twice.
+
+          Use **Check for updates** in DynamicDesktop or download the Windows x64 installer below.
+          '@ | Set-Content -Encoding utf8 'dist/release-notes.md'
+          gh release create v0.1.13 --repo 'Timminater/DynamicDesktop' --target '2cc8c206f6bb1fbfcb8d3f2ab20af33135a24250' --draft --title 'DynamicDesktop v0.1.13' --notes-file 'dist/release-notes.md' 'dist/DynamicDesktop-0.1.13-win-x64-Setup.exe' 'dist/DynamicDesktop-0.1.13-win-x64-Setup.exe.sha256' 'dist/DynamicDesktop-source.zip' 'dist/DynamicDesktop-source.zip.sha256'
+          if ($LASTEXITCODE -ne 0) { throw 'Release draft or asset upload failed' }
