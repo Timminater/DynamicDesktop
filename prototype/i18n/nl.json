@@ -762,7 +762,8 @@
       "groups": [
         "Onderwaterlandschap",
         "Vaartuigen",
-        "Zeeleven"
+        "Zeeleven",
+        "Verrassingen"
       ],
       "params": {
         "landscape": {
@@ -797,6 +798,11 @@
         },
         "bubbles": {
           "label": "Opstijgende luchtbellen"
+        },
+        "glass": {
+          "label": "Barstend glas",
+          "options": ["Uit", "Aan"],
+          "hint": "Af en toe slaat een bidsprinkhaankreeft tegen het glas van je scherm."
         }
       }
     }

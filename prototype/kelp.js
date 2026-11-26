@@ -10,7 +10,7 @@ const iconLayer = document.getElementById('icons');
 const TASKBAR = 48, GRID_X0 = 4, GRID_Y0 = 6, CELL_W = 76, CELL_H = 100;
 const KELP = 0, REEF = 1, SILT = 2;
 const DEFAULTS = { adaptive: 1, seed: 42, landscape: KELP, lighting: 0, kelpDensity: 0.64,
-  current: 0.8, submersibles: allKelpModels, interval: 55, fish: 1, wildlife: 1, bubbles: 5 };
+  current: 0.8, submersibles: allKelpModels, interval: 55, fish: 1, wildlife: 1, bubbles: 5, glass: 1 };
 const P = { ...DEFAULTS };
 const models = kelpModels;
 const modelIndices = models.map((_, index) => index);
@@ -63,8 +63,7 @@ function countDesktopClick(x, y, now = performance.now()) {
   emptyClickTimes.push(now);
   if (emptyClickTimes.length === 5) {
     emptyClickTimes.length = 0;
-    const eligible = desktopScenes.filter(sceneAvailable);
-    queueDesktopScene(eligible[Math.floor(Math.random() * eligible.length)]);
+    queueDesktopScene(pickScene(desktopScenes.filter(sceneAvailable)));
   }
 }
 
@@ -1205,12 +1204,27 @@ const desktopScenes = [
   { id: 'dolphins', en: 'Dolphins in the shallows', nl: 'Dolfijnen in de bovenlaag', duration: 23, layer: 'water', draw: drawKelpWildlifeScene, lighting: 0 },
   { id: 'silverHunt', en: 'Silver hunt', nl: 'Jacht op zilver', duration: 23, layer: 'water', draw: drawKelpWildlifeScene, lighting: 0 },
   { id: 'boatShadow', en: 'Shadow at the surface', nl: 'Schaduw aan het oppervlak', duration: 20, layer: 'overlay', draw: drawKelpSurfaceScene, lighting: 0 },
-  { id: 'fishingBoat', en: 'Fishing boat', nl: 'Vissersboot met vislijn', duration: 36, layer: 'water', draw: drawKelpSurfaceScene, lighting: 0 }
+  { id: 'fishingBoat', en: 'Fishing boat', nl: 'Vissersboot met vislijn', duration: 36, layer: 'water', draw: drawKelpSurfaceScene, lighting: 0 },
+  // The glass events break the fourth wall, so they are rare and can be turned off.
+  { id: 'glassCrack', en: 'Crack in the glass', nl: 'Barst in het glas', duration: 28, layer: 'overlay', draw: drawKelpGlassScene,
+    toggle: 'glass', weight: .3, jolt: KelpGlass.jolt, release: KelpGlass.release },
+  { id: 'glassBreak', en: 'Breaking glass', nl: 'Glasbreuk', duration: 30, layer: 'overlay', draw: drawKelpGlassScene,
+    toggle: 'glass', weight: .15, jolt: KelpGlass.jolt, release: KelpGlass.release }
 ];
 
 function sceneAvailable(scene) {
-  return enabledModels.length >= (scene.minModels ?? 0) &&
+  return enabledModels.length >= (scene.minModels ?? 0) && (scene.toggle == null || !!P[scene.toggle]) &&
     (scene.model == null || enabledModels.some(index => models[index].id === scene.model));
+}
+
+function pickScene(eligible) {
+  let roll = Math.random() * eligible.reduce((sum, scene) => sum + (scene.weight ?? 1), 0);
+  return eligible.find(scene => (roll -= scene.weight ?? 1) < 0) ?? eligible[eligible.length - 1];
+}
+
+function dropRequestedScene() {
+  requestedScene?.scene.release?.();
+  requestedScene = null;
 }
 
 function queueDesktopScene(scene) {
@@ -1218,6 +1232,7 @@ function queueDesktopScene(scene) {
   if (requestedScene) {
     setVesselPass(null);
     diverPass = null;
+    requestedScene.scene.release?.();
   }
   const delay = scene.lighting != null && Math.abs(scene.lighting - nightAmount) > .001 ? SCENE_FADE : .55;
   requestedScene = {
@@ -1281,7 +1296,7 @@ function beginDeepLurePass() {
 function advanceRequestedScene() {
   if (!requestedScene) return false;
   if (requestedScene.restoreAt != null) {
-    if (animationTime - requestedScene.restoreAt >= SCENE_FADE) requestedScene = null;
+    if (animationTime - requestedScene.restoreAt >= SCENE_FADE) dropRequestedScene();
     return true;
   }
   if (requestedScene.endsAt == null) {
@@ -1302,7 +1317,7 @@ function advanceRequestedScene() {
   nextSceneAt = animationTime + 110 + Math.random() * 75;
   const lighting = requestedScene.scene.lighting;
   if (lighting != null && Math.abs(nightTarget - lighting) > .001) requestedScene.restoreAt = animationTime;
-  else requestedScene = null;
+  else dropRequestedScene();
   return true;
 }
 
@@ -1339,7 +1354,8 @@ function drawShowcase(showcase, layer, light = null, surfaces = []) {
   if (layer !== 'overlay') {
     for (const icon of iconOccluders) ctx.clip(icon.path, 'evenodd');
   }
-  const lights = showcase.scene.draw(showcase, { ctx, W, H, night: nightAmount, seabed, models, enabledModels, modelWidth, light, surfaces }, layer);
+  const lights = showcase.scene.draw(showcase, { ctx, W, H, night: nightAmount, seabed, models, enabledModels, modelWidth, light, surfaces,
+    icons, floor: WALL ? H - TASKBAR : H, drawDiver: drawScubaDiver }, layer);
   ctx.restore();
   return lights;
 }
@@ -1353,7 +1369,7 @@ function advanceVessels() {
   if ((WALL || DEMO) && animationTime >= nextSceneAt) {
     const eligible = desktopScenes.filter(scene => sceneAvailable(scene) &&
       (scene.lighting == null || (scene.lighting === 1 ? nightAmount > .82 : nightAmount < .18)));
-    queueDesktopScene(eligible[Math.floor(Math.random() * eligible.length)]);
+    queueDesktopScene(pickScene(eligible));
     return;
   }
   if (!enabledModels.length || animationTime < nextPassAt) return;
@@ -1732,7 +1748,11 @@ function scenerySurfaces(now, wake) {
 }
 
 function draw(now) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const showcase = currentShowcase();
+  // Scenes that hit the glass shake the whole picture for a moment.
+  const jolt = showcase?.scene.jolt?.(showcase);
+  const joltX = jolt ? jolt.x * cv.width / W : 0, joltY = jolt ? jolt.y * cv.height / H : 0;
+  ctx.setTransform(1, 0, 0, 1, joltX, joltY);
   ctx.globalAlpha = 1;
   if (nightAmount < 1) ctx.drawImage(backdropAt(false), 0, 0);
   if (nightAmount > 0) {
@@ -1740,8 +1760,7 @@ function draw(now) {
     ctx.drawImage(backdropAt(true), 0, 0);
     ctx.globalAlpha = 1;
   }
-  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
-  const showcase = currentShowcase();
+  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, joltX, joltY);
   drawShowcase(showcase, 'distant');
   ctx.fillStyle = shade('#1d4650', '#040f1e');
   ctx.fill(floor);
@@ -1857,12 +1876,12 @@ function applySettings(values) {
     P.submersibles = selection;
     enabledModels = modelIndices.filter(index => selection & (1 << index));
     const excludedPass = pass && !enabledModels.includes(pass.index);
-    if (requestedScene && (excludedPass || !sceneAvailable(requestedScene.scene))) requestedScene = null;
+    if (requestedScene && (excludedPass || !sceneAvailable(requestedScene.scene))) dropRequestedScene();
     if (excludedPass) setVesselPass(null);
     if (!enabledModels.length) previousWake = null;
   }
   const limits = { adaptive: [0, 1], seed: [0, Number.MAX_SAFE_INTEGER], landscape: [KELP, SILT], lighting: [0, 2], kelpDensity: [.25, 1],
-    current: [0, 1.6], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12] };
+    current: [0, 1.6], interval: [30, 150], fish: [0, 3], wildlife: [0, 1], bubbles: [0, 12], glass: [0, 1] };
   const previousSeed = P.seed;
   let regenerate = false, changeLandscape = false, changeLighting = false;
   for (const [key, [low, high]] of Object.entries(limits)) {
@@ -1876,6 +1895,7 @@ function applySettings(values) {
     changeLighting ||= key === 'lighting';
   }
   if (P.seed !== previousSeed) resetBackdrop();
+  if (requestedScene?.scene.toggle && !P[requestedScene.scene.toggle]) dropRequestedScene();
   if (changeLighting) updateLighting(performance.now(), true);
   if (changeLandscape || regenerate) commit(changeLandscape);
   if (!requestedScene && pass?.cinematic && (changeLandscape || nightAmount < .4)) {
