@@ -356,6 +356,18 @@
               "default": 5
             }
           ]
+        },
+        {
+          "name": "Surprises",
+          "params": [
+            {
+              "key": "glass",
+              "label": "Cracking glass",
+              "options": ["Off", "On"],
+              "hint": "Now and then a mantis shrimp strikes the glass of your screen.",
+              "default": 1
+            }
+          ]
         }
       ]
     },
