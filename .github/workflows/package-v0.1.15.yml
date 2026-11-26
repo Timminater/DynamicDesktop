@@ -1,0 +1,90 @@
+name: Package DynamicDesktop v0.1.15
+on:
+  push:
+    branches: ['release-build/v0.1.15']
+    paths: ['.github/workflows/package-v0.1.15.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: bc7d3167f3fbba6a4ba2fa5a2e5793afc7f6ac6a
+          persist-credentials: false
+      - name: Check out the verified NSIS archive from the build branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: ci-dependencies
+          persist-credentials: false
+          sparse-checkout: nsis-3.13.zip
+          sparse-checkout-cone-mode: false
+      - name: Prepare pinned build dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force host/lib, dist/installer-tools | Out-Null
+          Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4191.47/microsoft.web.webview2.1.0.4191.47.nupkg' -OutFile 'host/lib/Microsoft.Web.WebView2.1.0.4191.47.nupkg'
+          $nsisZip = 'ci-dependencies/nsis-3.13.zip'
+          if ((Get-FileHash $nsisZip).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') { throw 'Invalid NSIS archive checksum' }
+          Expand-Archive $nsisZip -DestinationPath 'dist/installer-tools'
+      - name: Build and verify installer and source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\tools\build-installer.ps1 -NsisCompiler 'dist/installer-tools/nsis-3.13/makensis.exe'
+          $hostVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'host/bin/DynamicDesktop.exe').Path).FileVersion
+          if ($hostVersion -ne '0.1.15.0') { throw "Unexpected host version $hostVersion" }
+          foreach ($asset in 'DynamicDesktop-0.1.15-win-x64-Setup.exe', 'DynamicDesktop-source.zip') {
+            $path = Join-Path dist $asset
+            $hash = (Get-FileHash $path).Hash
+            if ((Get-Content -Raw "$path.sha256").Trim() -ne "$hash  $asset") { throw "Checksum mismatch for $asset" }
+            Write-Host "$asset SHA-256 $hash"
+          }
+      - name: Upload, verify and publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $repo = 'Timminater/DynamicDesktop'
+          $tag = 'v0.1.15'
+          $target = 'bc7d3167f3fbba6a4ba2fa5a2e5793afc7f6ac6a'
+          $main = gh api "repos/$repo/commits/main" --jq '.sha'
+          if ($main -ne $target) { throw 'Unexpected main commit' }
+
+          @'
+          ## Two new UboatWorx surprises
+
+          - A mantis shrimp strikes the aquarium glass in two rare scenes. A diver tapes the crack in one scene, and the glass shatters in the other.
+          - Turn the scenes on or off under **Surprises** in the UboatWorx settings.
+
+          Use **Check for updates** in DynamicDesktop or download the Windows x64 installer below.
+          '@ | Set-Content -Encoding utf8 'dist/release-notes.md'
+
+          $names = @('DynamicDesktop-0.1.15-win-x64-Setup.exe', 'DynamicDesktop-0.1.15-win-x64-Setup.exe.sha256', 'DynamicDesktop-source.zip', 'DynamicDesktop-source.zip.sha256')
+          $assets = @($names | ForEach-Object { Join-Path 'dist' $_ })
+          gh release create $tag --repo $repo --target $target --draft --title 'DynamicDesktop v0.1.15' --notes-file 'dist/release-notes.md' @assets
+
+          $draft = @(gh api "repos/$repo/releases?per_page=10" | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag })
+          if ($draft.Count -ne 1 -or -not $draft[0].draft -or $draft[0].prerelease -or $draft[0].target_commitish -ne $target) {
+            throw 'Unexpected release draft'
+          }
+          if ($draft[0].assets.Count -ne $names.Count) { throw 'Unexpected release asset count' }
+          foreach ($name in $names) {
+            $localDigest = (Get-FileHash (Join-Path 'dist' $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            $asset = @($draft[0].assets | Where-Object { $_.name -ceq $name })
+            if ($asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$localDigest" -or $asset[0].state -ne 'uploaded') {
+              throw "Release asset verification failed for $name"
+            }
+          }
+
+          gh release edit $tag --repo $repo --draft=false --latest
+          $latest = gh api "repos/$repo/releases/latest" | ConvertFrom-Json
+          if ($latest.tag_name -ne $tag -or $latest.draft -or $latest.prerelease) { throw 'The updater feed does not offer the new stable release' }
+          if ((gh api "repos/$repo/commits/$tag" --jq '.sha') -ne $target) { throw 'Unexpected release tag commit' }
